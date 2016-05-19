@@ -1,5 +1,7 @@
 # Jenkins Exporter
 
+[![Build Status](https://api.travis-ci.org/lovoo/jenkins_exporter.svg?branch=travis_setup)](https://travis-ci.org/lovoo/jenkins_exporter)
+
 Jenkins exporter for prometheus.io, written in python.
 
 This exporter is based on Robust Perception's python exporter example:
