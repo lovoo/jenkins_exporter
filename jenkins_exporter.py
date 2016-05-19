@@ -117,13 +117,12 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description='jenkins exporter args jenkins address and port'
     )
-
     parser.add_argument(
         '-j', '--jenkins',
         metavar='jenkins',
         required=False,
         help='server url from the jenkins api',
-        default='ttp://jenkins:8080'
+        default='http://jenkins:8080'
     )
     parser.add_argument(
         '-p', '--port',
