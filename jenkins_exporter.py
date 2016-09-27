@@ -86,10 +86,10 @@ class JenkinsCollector(object):
             }
 
     def _get_metrics(self, name, job):
-            for status in self.statuses:
-                if status in job.keys():
-                    status_data = job[status] or {}
-                    self._add_data_to_prometheus_structure(status, status_data, job, name)
+        for status in self.statuses:
+            if status in job.keys():
+                status_data = job[status] or {}
+                self._add_data_to_prometheus_structure(status, status_data, job, name)
 
     def _add_data_to_prometheus_structure(self, status, status_data, job, name):
         # If there's a null result, we want to pass.
