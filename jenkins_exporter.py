@@ -6,11 +6,12 @@ import requests
 import argparse
 from pprint import pprint
 
+import os
 from sys import exit
 from prometheus_client import start_http_server
 from prometheus_client.core import GaugeMetricFamily, REGISTRY
 
-DEBUG = 1
+DEBUG = int(os.environ.get('DEBUG', '0'))
 
 
 class JenkinsCollector(object):
@@ -144,7 +145,7 @@ def parse_args():
         metavar='jenkins',
         required=False,
         help='server url from the jenkins api',
-        default='http://jenkins:8080'
+        default=os.environ.get('JENKINS_SERVER', 'http://jenkins:8080')
     )
     parser.add_argument(
         '-p', '--port',
@@ -152,7 +153,7 @@ def parse_args():
         required=False,
         type=int,
         help='Listen to this port',
-        default=9118
+        default=int(os.environ.get('VIRTUAL_PORT', '9118'))
     )
     return parser.parse_args()
 
@@ -163,7 +164,7 @@ def main():
         port = int(args.port)
         REGISTRY.register(JenkinsCollector(args.jenkins))
         start_http_server(port)
-        print "Serving at port: ", port
+        print "Polling %s. Serving at port: %s" % (args.jenkins, port)
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
