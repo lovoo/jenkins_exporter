@@ -4,10 +4,12 @@ RUN mkdir -p /usr/src/app
 WORKDIR /usr/src/app
 
 COPY requirements.txt /usr/src/app
-COPY jenkins_exporter.py /usr/src/app
 RUN pip install --no-cache-dir -r requirements.txt
 
-EXPOSE 9118
+COPY jenkins_exporter.py /usr/src/app
 
-ENTRYPOINT [ "python", "./jenkins_exporter.py" ]
-CMD ["-j", "http://jenkins:8080", "-p", "9118"]
+EXPOSE 9118
+ENV JENKINS_SERVER=http://jenkins:8080 VIRTUAL_PORT=9118 DEBUG=0
+
+ENTRYPOINT [ "python", "-u", "./jenkins_exporter.py" ]
+CMD []

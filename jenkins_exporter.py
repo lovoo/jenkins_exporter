@@ -4,10 +4,14 @@ import re
 import time
 import requests
 import argparse
+from pprint import pprint
 
+import os
 from sys import exit
 from prometheus_client import start_http_server
 from prometheus_client.core import GaugeMetricFamily, REGISTRY
+
+DEBUG = int(os.environ.get('DEBUG', '0'))
 
 
 class JenkinsCollector(object):
@@ -21,12 +25,15 @@ class JenkinsCollector(object):
 
     def collect(self):
         # Request data from Jenkins
-        jenkins_data = self._request_data()
+        jobs = self._request_data()
 
         self._setup_empty_prometheus_metrics()
 
-        for job in jenkins_data['jobs']:
+        for job in jobs:
             name = job['name']
+            if DEBUG:
+                print "Found Job: %s" % name
+                pprint(job)
             self._get_metrics(name, job)
 
         for status in self.statuses:
@@ -38,16 +45,29 @@ class JenkinsCollector(object):
         url = '{0}/api/json'.format(self._target)
         jobs = "[number,timestamp,duration,actions[queuingDurationMillis,totalDurationMillis," \
                "skipCount,failCount,totalCount,passCount]]"
-        tree = 'jobs[name,{0}]'.format(','.join([s + jobs for s in self.statuses]))
+        tree = 'jobs[name,url,{0}]'.format(','.join([s + jobs for s in self.statuses]))
         params = {
             'tree': tree,
         }
-        # params = tree: jobs[name,lastBuild[number,timestamp,duration,actions[queuingDurationMillis...
-        response = requests.get(url, params=params)
-        if response.status_code != requests.codes.ok:
-            raise Exception('Response Status ({0}): {1}'.format(response.status_code, response.text))
-        result = response.json()
-        return result
+
+        def parsejobs(myurl):
+            # params = tree: jobs[name,lastBuild[number,timestamp,duration,actions[queuingDurationMillis...
+            response = requests.get(myurl, params=params)
+            if response.status_code != requests.codes.ok:
+                return[]
+            result = response.json()
+            if DEBUG:
+                pprint(result)
+
+            jobs = []
+            for job in result['jobs']:
+                if job['_class'] == 'com.cloudbees.hudson.plugins.folder.Folder':
+                    jobs += parsejobs(job['url'] + '/api/json')
+                else:
+                    jobs.append(job)
+            return jobs
+
+        return parsejobs(url)
 
     def _setup_empty_prometheus_metrics(self):
         # The metrics we want to export.
@@ -93,27 +113,28 @@ class JenkinsCollector(object):
 
     def _add_data_to_prometheus_structure(self, status, status_data, job, name):
         # If there's a null result, we want to pass.
-        if status_data.get('duration'):
+        if status_data.get('duration', 0):
             self._prometheus_metrics[status]['duration'].add_metric([name], status_data.get('duration') / 1000.0)
-        if status_data.get('timestamp'):
+        if status_data.get('timestamp', 0):
             self._prometheus_metrics[status]['timestamp'].add_metric([name], status_data.get('timestamp') / 1000.0)
-        if status_data.get('number'):
+        if status_data.get('number', 0):
             self._prometheus_metrics[status]['number'].add_metric([name], status_data.get('number'))
         actions_metrics = status_data.get('actions', [{}])
         for metric in actions_metrics:
-            if metric.has_key('queuingDurationMillis') and metric.get('queuingDurationMillis'):
+            if metric.get('queuingDurationMillis', False):
                 self._prometheus_metrics[status]['queuingDurationMillis'].add_metric([name], metric.get('queuingDurationMillis') / 1000.0)
-            if metric.has_key('totalDurationMillis') and metric.get('totalDurationMillis'):
+            if metric.get('totalDurationMillis', False):
                 self._prometheus_metrics[status]['totalDurationMillis'].add_metric([name], metric.get('totalDurationMillis') / 1000.0)
-            if metric.has_key('skipCount') and metric.get('skipCount'):
+            if metric.get('skipCount', False):
                 self._prometheus_metrics[status]['skipCount'].add_metric([name], metric.get('skipCount'))
-            if metric.has_key('failCount') and metric.get('failCount'):
+            if metric.get('failCount', False):
                 self._prometheus_metrics[status]['failCount'].add_metric([name], metric.get('failCount'))
-            if metric.has_key('totalCount') and metric.get('totalCount'):
+            if metric.get('totalCount', False):
                 self._prometheus_metrics[status]['totalCount'].add_metric([name], metric.get('totalCount'))
                 # Calculate passCount by subtracting fails and skips from totalCount
                 passcount = metric.get('totalCount') - metric.get('failCount') - metric.get('skipCount')
                 self._prometheus_metrics[status]['passCount'].add_metric([name], passcount)
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -124,7 +145,7 @@ def parse_args():
         metavar='jenkins',
         required=False,
         help='server url from the jenkins api',
-        default='http://jenkins:8080'
+        default=os.environ.get('JENKINS_SERVER', 'http://jenkins:8080')
     )
     parser.add_argument(
         '-p', '--port',
@@ -132,18 +153,24 @@ def parse_args():
         required=False,
         type=int,
         help='Listen to this port',
-        default=9118
+        default=int(os.environ.get('VIRTUAL_PORT', '9118'))
     )
     return parser.parse_args()
 
-if __name__ == "__main__":
+
+def main():
     try:
         args = parse_args()
         port = int(args.port)
         REGISTRY.register(JenkinsCollector(args.jenkins))
         start_http_server(port)
-        print "Serving at port: ", port
-        while True: time.sleep(1)
+        print "Polling %s. Serving at port: %s" % (args.jenkins, port)
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
         print(" Interrupted")
         exit(0)
+
+
+if __name__ == "__main__":
+    main()
