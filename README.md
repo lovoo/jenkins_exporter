@@ -9,7 +9,21 @@ For more information see (http://www.robustperception.io/writing-a-jenkins-expor
 
 ## Usage
 
+    jenkins_exporter.py [-h] [-j jenkins] [--user user]
+                        [--password password] [-p port]
+
+    optional arguments:
+      -h, --help            show this help message and exit
+      -j jenkins, --jenkins jenkins
+                            server url from the jenkins api
+      --user user           jenkins api user
+      --password password   jenkins api password
+      -p port, --port port  Listen to this port
+
+#### Example
+
     docker run -d -p 9118:9118 lovoo/jenkins_exporter:latest -j http://jenkins:8080 -p 9118
+
 
 ## Installation
 
