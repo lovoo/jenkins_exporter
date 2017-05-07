@@ -20,8 +20,9 @@ class JenkinsCollector(object):
                 "lastStableBuild", "lastSuccessfulBuild", "lastUnstableBuild",
                 "lastUnsuccessfulBuild"]
 
-    def __init__(self, target):
+    def __init__(self, target, verify_tls):
         self._target = target.rstrip("/")
+        self._verify_tls = verify_tls
 
     def collect(self):
         # Request data from Jenkins
@@ -52,7 +53,7 @@ class JenkinsCollector(object):
 
         def parsejobs(myurl):
             # params = tree: jobs[name,lastBuild[number,timestamp,duration,actions[queuingDurationMillis...
-            response = requests.get(myurl, params=params)
+            response = requests.get(myurl, params=params, verify=self._verify_tls)
             if response.status_code != requests.codes.ok:
                 return[]
             result = response.json()
@@ -155,6 +156,13 @@ def parse_args():
         help='Listen to this port',
         default=int(os.environ.get('VIRTUAL_PORT', '9118'))
     )
+    parser.add_argument(
+        '--disable-cert-verification',
+        required=False,
+        type=bool,
+        help='Disable TLS Cert Verification',
+        default=False
+    )
     return parser.parse_args()
 
 
@@ -162,7 +170,8 @@ def main():
     try:
         args = parse_args()
         port = int(args.port)
-        REGISTRY.register(JenkinsCollector(args.jenkins))
+        verify_tls = not args.disable_cert_verification
+        REGISTRY.register(JenkinsCollector(args.jenkins, verify_tls))
         start_http_server(port)
         print "Polling %s. Serving at port: %s" % (args.jenkins, port)
         while True:
