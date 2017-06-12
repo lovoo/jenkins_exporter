@@ -45,7 +45,7 @@ class JenkinsCollector(object):
         url = '{0}/api/json'.format(self._target)
         jobs = "[number,timestamp,duration,actions[queuingDurationMillis,totalDurationMillis," \
                "skipCount,failCount,totalCount,passCount]]"
-        tree = 'jobs[name,url,{0}]'.format(','.join([s + jobs for s in self.statuses]))
+        tree = 'jobs[name,url,color,{0}]'.format(','.join([s + jobs for s in self.statuses]))
         params = {
             'tree': tree,
         }
@@ -104,12 +104,17 @@ class JenkinsCollector(object):
                     GaugeMetricFamily('jenkins_job_{0}_pass_count'.format(snake_case),
                                       'Jenkins build pass counts for {0}'.format(status), labels=["jobname"]),
             }
+        self._prometheus_metrics['lastBuild']['is_running'] = GaugeMetricFamily('jenkins_job_last_build_is_running',
+                                                                                'Jenkins build is running now for lastBuild', labels=["jobname"])
 
     def _get_metrics(self, name, job):
         for status in self.statuses:
             if status in job.keys():
                 status_data = job[status] or {}
                 self._add_data_to_prometheus_structure(status, status_data, job, name)
+                if status == 'lastBuild':
+                    is_running = 1 if '_anime' in job['color'] else 0
+                    self._prometheus_metrics['lastBuild']['is_running'].add_metric([name], is_running)
 
     def _add_data_to_prometheus_structure(self, status, status_data, job, name):
         # If there's a null result, we want to pass.
@@ -121,19 +126,22 @@ class JenkinsCollector(object):
             self._prometheus_metrics[status]['number'].add_metric([name], status_data.get('number'))
         actions_metrics = status_data.get('actions', [{}])
         for metric in actions_metrics:
-            if metric.get('queuingDurationMillis', False):
-                self._prometheus_metrics[status]['queuingDurationMillis'].add_metric([name], metric.get('queuingDurationMillis') / 1000.0)
-            if metric.get('totalDurationMillis', False):
-                self._prometheus_metrics[status]['totalDurationMillis'].add_metric([name], metric.get('totalDurationMillis') / 1000.0)
-            if metric.get('skipCount', False):
-                self._prometheus_metrics[status]['skipCount'].add_metric([name], metric.get('skipCount'))
-            if metric.get('failCount', False):
-                self._prometheus_metrics[status]['failCount'].add_metric([name], metric.get('failCount'))
-            if metric.get('totalCount', False):
-                self._prometheus_metrics[status]['totalCount'].add_metric([name], metric.get('totalCount'))
-                # Calculate passCount by subtracting fails and skips from totalCount
-                passcount = metric.get('totalCount') - metric.get('failCount') - metric.get('skipCount')
-                self._prometheus_metrics[status]['passCount'].add_metric([name], passcount)
+            try:
+                if metric.get('queuingDurationMillis', False):
+                    self._prometheus_metrics[status]['queuingDurationMillis'].add_metric([name], metric.get('queuingDurationMillis') / 1000.0)
+                if metric.get('totalDurationMillis', False):
+                    self._prometheus_metrics[status]['totalDurationMillis'].add_metric([name], metric.get('totalDurationMillis') / 1000.0)
+                if metric.get('skipCount', False):
+                    self._prometheus_metrics[status]['skipCount'].add_metric([name], metric.get('skipCount'))
+                if metric.get('failCount', False):
+                    self._prometheus_metrics[status]['failCount'].add_metric([name], metric.get('failCount'))
+                if metric.get('totalCount', False):
+                    self._prometheus_metrics[status]['totalCount'].add_metric([name], metric.get('totalCount'))
+                    # Calculate passCount by subtracting fails and skips from totalCount
+                    passcount = metric.get('totalCount') - metric.get('failCount') - metric.get('skipCount')
+                    self._prometheus_metrics[status]['passCount'].add_metric([name], passcount)
+            except AttributeError:
+                pass
 
 
 def parse_args():
