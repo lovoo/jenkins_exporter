@@ -20,8 +20,10 @@ class JenkinsCollector(object):
                 "lastStableBuild", "lastSuccessfulBuild", "lastUnstableBuild",
                 "lastUnsuccessfulBuild"]
 
-    def __init__(self, target):
+    def __init__(self, target, user, password):
         self._target = target.rstrip("/")
+        self._user = user
+        self._password = password
 
     def collect(self):
         # Request data from Jenkins
@@ -52,7 +54,7 @@ class JenkinsCollector(object):
 
         def parsejobs(myurl):
             # params = tree: jobs[name,lastBuild[number,timestamp,duration,actions[queuingDurationMillis...
-            response = requests.get(myurl, params=params)
+            response = requests.get(myurl, params=params, auth=(self._user, self._password))
             if response.status_code != requests.codes.ok:
                 return[]
             result = response.json()
@@ -148,6 +150,20 @@ def parse_args():
         default=os.environ.get('JENKINS_SERVER', 'http://jenkins:8080')
     )
     parser.add_argument(
+        '--user',
+        metavar='user',
+        required=False,
+        help='jenkins api user',
+        default=os.environ.get('JENKINS_USER')
+    )
+    parser.add_argument(
+        '--password',
+        metavar='password',
+        required=False,
+        help='jenkins api password',
+        default=os.environ.get('JENKINS_PASSWORD')
+    )
+    parser.add_argument(
         '-p', '--port',
         metavar='port',
         required=False,
@@ -162,7 +178,7 @@ def main():
     try:
         args = parse_args()
         port = int(args.port)
-        REGISTRY.register(JenkinsCollector(args.jenkins))
+        REGISTRY.register(JenkinsCollector(args.jenkins, args.user, args.password))
         start_http_server(port)
         print "Polling %s. Serving at port: %s" % (args.jenkins, port)
         while True:
