@@ -54,20 +54,23 @@ class JenkinsCollector(object):
 
         def parsejobs(myurl):
             # params = tree: jobs[name,lastBuild[number,timestamp,duration,actions[queuingDurationMillis...
-            response = requests.get(myurl, params=params, auth=(self._user, self._password))
+#            response = requests.get(myurl, params=params, auth=(self._user, self._password))
+            response = requests.get(myurl, params=params)
             if response.status_code != requests.codes.ok:
                 return[]
             result = response.json()
             if DEBUG:
                 pprint(result)
+                pprint(response.headers['X-Jenkins'])
 
             jobs = []
             for job in result['jobs']:
-                if job['_class'] == 'com.cloudbees.hudson.plugins.folder.Folder' or \
-                   job['_class'] == 'org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject':
-                    jobs += parsejobs(job['url'] + '/api/json')
-                else:
-                    jobs.append(job)
+                if re.match('^2',response.headers['X-Jenkins']):
+                    if job['_class'] == 'com.cloudbees.hudson.plugins.folder.Folder' or \
+                    job['_class'] == 'org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject':
+                        jobs += parsejobs(job['url'] + '/api/json')
+                    else:
+                        jobs.append(job)
             return jobs
 
         return parsejobs(url)
@@ -173,10 +176,15 @@ def parse_args():
         default=int(os.environ.get('VIRTUAL_PORT', '9118'))
     )
     return parser.parse_args()
-
+def set_args():
+#    os.environ['JENKINS_PASSWORD']='peace-war.00'
+#    os.environ['JENKINS_USER']='goorarye'
+#    os.environ['JENKINS_SERVER']='http://mydtbld0136.hpeswlab.net:8080'
+    os.environ['JENKINS_SERVER']='http://mydtbld0181.hpeswlab.net:8080'
 
 def main():
     try:
+        set_args()
         args = parse_args()
         port = int(args.port)
         REGISTRY.register(JenkinsCollector(args.jenkins, args.user, args.password))
