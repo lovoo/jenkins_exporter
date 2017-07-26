@@ -5,7 +5,7 @@ import time
 import requests
 import argparse
 from pprint import pprint
-
+import json
 import os
 from sys import exit
 from prometheus_client import start_http_server
@@ -20,10 +20,11 @@ class JenkinsCollector(object):
                 "lastStableBuild", "lastSuccessfulBuild", "lastUnstableBuild",
                 "lastUnsuccessfulBuild"]
 
-    def __init__(self, target, user, password):
+    def __init__(self, target, user, password, jobs_list=[]):
         self._target = target.rstrip("/")
         self._user = user
         self._password = password
+        self._jobs_list=jobs_list
 
     def collect(self):
         # Request data from Jenkins
@@ -42,6 +43,15 @@ class JenkinsCollector(object):
             for metric in self._prometheus_metrics[status].values():
                 yield metric
 
+    def job_in_list(self, job_to_search):
+            if self._jobs_list == []:
+                return True
+            for job in self._jobs_list['jobs']:
+                if job['name'] == job_to_search:
+                    return True
+            return False
+
+    
     def _request_data(self):
         # Request exactly the information we need from Jenkins
         url = '{0}/api/json'.format(self._target)
@@ -51,6 +61,7 @@ class JenkinsCollector(object):
         params = {
             'tree': tree,
         }
+
 
         def parsejobs(myurl):
             # params = tree: jobs[name,lastBuild[number,timestamp,duration,actions[queuingDurationMillis...
@@ -70,7 +81,8 @@ class JenkinsCollector(object):
                     job['_class'] == 'org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject':
                         jobs += parsejobs(job['url'] + '/api/json')
                     else:
-                        jobs.append(job)
+                        if self.job_in_list(job['name']):
+                            jobs.append(job)
             return jobs
 
         return parsejobs(url)
@@ -175,19 +187,36 @@ def parse_args():
         help='Listen to this port',
         default=int(os.environ.get('VIRTUAL_PORT', '9118'))
     )
+    parser.add_argument(
+        '-f', '--jobsfile',
+        metavar='jobsfile',
+        required=False,
+        help='json file with the jobs to monitor',
+        default=os.environ.get('JOBS_FILE','')
+    )
     return parser.parse_args()
+
 def set_args():
-#    os.environ['JENKINS_PASSWORD']='peace-war.00'
-#    os.environ['JENKINS_USER']='goorarye'
-#    os.environ['JENKINS_SERVER']='http://mydtbld0136.hpeswlab.net:8080'
     os.environ['JENKINS_SERVER']='http://mydtbld0181.hpeswlab.net:8080'
+#    os.environ['JOBS_FILE']='jobs.json'
+
+def get_filter_jobs(jobs_file):
+    if jobs_file != '':
+        try:
+            with open(jobs_file, 'r') as jFile:
+                jString=jFile.read()
+                return json.loads(jString)
+        except IOError as e:
+            print("WARNING: cannot open jobs file \"{0}\". I/O error({1}): {2}. Ignoring filter file.".format(jobs_file,e.errno, e.strerror))
+    return[]
 
 def main():
     try:
         set_args()
         args = parse_args()
         port = int(args.port)
-        REGISTRY.register(JenkinsCollector(args.jenkins, args.user, args.password))
+        jobs_filter = get_filter_jobs(str(args.jobsfile))
+        REGISTRY.register(JenkinsCollector(args.jenkins, args.user, args.password, jobs_filter))
         start_http_server(port)
         print "Polling %s. Serving at port: %s" % (args.jenkins, port)
         while True:
