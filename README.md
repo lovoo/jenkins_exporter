@@ -1,11 +1,14 @@
 # Jenkins Exporter
 
-[![Build Status](https://api.travis-ci.org/lovoo/jenkins_exporter.svg?branch=travis_setup)](https://travis-ci.org/lovoo/jenkins_exporter)
+[![Build Status](https://travis-ci.org/AbletonDevTools/jenkins_exporter.svg?branch=master)](https://travis-ci.org/AbletonDevTools/jenkins_exporter)
 
 Jenkins exporter for prometheus.io, written in python.
 
-This exporter is based on Robust Perception's python exporter example:
-For more information see (http://www.robustperception.io/writing-a-jenkins-exporter-in-python)
+This exporter is forked from Lovoo's [jenkins_exporter](
+https://github.com/lovoo/jenkins_exporter), which is based on Robust
+Perception's python exporter example:
+For more information see
+(http://www.robustperception.io/writing-a-jenkins-exporter-in-python)
 
 ## Usage
 
@@ -22,12 +25,12 @@ For more information see (http://www.robustperception.io/writing-a-jenkins-expor
 
 #### Example
 
-    docker run -d -p 9118:9118 lovoo/jenkins_exporter:latest -j http://jenkins:8080 -p 9118
+    docker run -d -p 9118:9118 AbletonDevTools/jenkins_exporter:latest -j http://jenkins:8080 -p 9118
 
 
 ## Installation
 
-    git clone git@github.com:lovoo/jenkins_exporter.git
+    git clone git@github.com:AbletonDevTools/jenkins_exporter.git
     cd jenkins_exporter
     pip install -r requirements.txt
 
@@ -38,3 +41,10 @@ For more information see (http://www.robustperception.io/writing-a-jenkins-expor
 3. Commit your changes: `git commit -am 'Add some feature'`
 4. Push to the branch: `git push origin my-new-feature`
 5. Submit a pull request
+
+## Maintainers
+
+* [@ala-ableton](https://github.com/ala-ableton)
+* [@mst-ableton](https://github.com/mst-ableton)
+* [@nre-ableton](https://github.com/nre-ableton)
+* [@rco-ableton](https://github.com/rco-ableton)
