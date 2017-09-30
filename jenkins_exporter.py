@@ -137,7 +137,7 @@ class JenkinsCollector(object):
         if status_data.get('score') is not None:
             self._prometheus_metrics[status]['health'].add_metric([name], status_data.get('score'))
         if status_data.get('color') is not None:
-            self._prometheus_metrics[status]['status'].add_metric([name], 1 if (status_data.get('color') == 'blue') else 0)
+            self._prometheus_metrics[status]['status'].add_metric([name], 1 if (status_data.get('color').startswith('blue')) else 0)
         actions_metrics = status_data.get('actions', [{}])
         for metric in actions_metrics:
             if metric.get('queuingDurationMillis', False):
