@@ -212,8 +212,7 @@ def parse_args():
     parser.add_argument(
         '--disable-cert-verification',
         required=False,
-        type=bool,
-        action='store_true',
+        action="store_true",
         help='Disable TLS Cert Verification',
         default=False
     )
@@ -258,7 +257,7 @@ def main():
         domain = args.domain
         jobs_filter = get_filter_jobs(str(args.jobsfile))
         verify_tls = not args.disable_cert_verification
-        REGISTRY.register(JenkinsCollector(args.jenkins, args.user, args.password, verify_tls, job_filter))
+        REGISTRY.register(JenkinsCollector(args.jenkins, args.user, args.password, verify_tls, jobs_filter))
         start_http_server(port)
         if domain != '':
             start_http_server(port, domain)
