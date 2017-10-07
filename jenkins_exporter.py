@@ -45,7 +45,7 @@ class JenkinsCollector(object):
     def _request_data(self):
         # Request exactly the information we need from Jenkins
         url = '{0}/api/json'.format(self._target)
-        jobs = "[number,timestamp,duration,actions[queuingDurationMillis,totalDurationMillis," \
+        jobs = "[number,timestamp,duration,builtOn,actions[queuingDurationMillis,totalDurationMillis," \
                "skipCount,failCount,totalCount,passCount]]"
         tree = 'jobs[name,url,{0}]'.format(','.join([s + jobs for s in self.statuses]))
         params = {
@@ -77,66 +77,69 @@ class JenkinsCollector(object):
         self._prometheus_metrics = {}
         for status in self.statuses:
             snake_case = re.sub('([A-Z])', '_\\1', status).lower()
+            labels = ["jobname", "agent"]
             self._prometheus_metrics[status] = {
                 'number':
                     GaugeMetricFamily('jenkins_job_{0}'.format(snake_case),
-                                      'Jenkins build number for {0}'.format(status), labels=["jobname"]),
+                                      'Jenkins build number for {0}'.format(status), labels=labels),
                 'duration':
                     GaugeMetricFamily('jenkins_job_{0}_duration_seconds'.format(snake_case),
-                                      'Jenkins build duration in seconds for {0}'.format(status), labels=["jobname"]),
+                                      'Jenkins build duration in seconds for {0}'.format(status), labels=labels),
                 'timestamp':
                     GaugeMetricFamily('jenkins_job_{0}_timestamp_seconds'.format(snake_case),
-                                      'Jenkins build timestamp in unixtime for {0}'.format(status), labels=["jobname"]),
+                                      'Jenkins build timestamp in unixtime for {0}'.format(status), labels=labels),
                 'queuingDurationMillis':
                     GaugeMetricFamily('jenkins_job_{0}_queuing_duration_seconds'.format(snake_case),
                                       'Jenkins build queuing duration in seconds for {0}'.format(status),
-                                      labels=["jobname"]),
+                                      labels=labels),
                 'totalDurationMillis':
                     GaugeMetricFamily('jenkins_job_{0}_total_duration_seconds'.format(snake_case),
-                                      'Jenkins build total duration in seconds for {0}'.format(status), labels=["jobname"]),
+                                      'Jenkins build total duration in seconds for {0}'.format(status), labels=labels),
                 'skipCount':
                     GaugeMetricFamily('jenkins_job_{0}_skip_count'.format(snake_case),
-                                      'Jenkins build skip counts for {0}'.format(status), labels=["jobname"]),
+                                      'Jenkins build skip counts for {0}'.format(status), labels=labels),
                 'failCount':
                     GaugeMetricFamily('jenkins_job_{0}_fail_count'.format(snake_case),
-                                      'Jenkins build fail counts for {0}'.format(status), labels=["jobname"]),
+                                      'Jenkins build fail counts for {0}'.format(status), labels=labels),
                 'totalCount':
                     GaugeMetricFamily('jenkins_job_{0}_total_count'.format(snake_case),
-                                      'Jenkins build total counts for {0}'.format(status), labels=["jobname"]),
+                                      'Jenkins build total counts for {0}'.format(status), labels=labels),
                 'passCount':
                     GaugeMetricFamily('jenkins_job_{0}_pass_count'.format(snake_case),
-                                      'Jenkins build pass counts for {0}'.format(status), labels=["jobname"]),
+                                      'Jenkins build pass counts for {0}'.format(status), labels=labels),
             }
 
     def _get_metrics(self, name, job):
         for status in self.statuses:
             if status in job.keys():
                 status_data = job[status] or {}
-                self._add_data_to_prometheus_structure(status, status_data, job, name)
+                self._add_data_to_prometheus_structure(status, status_data, name)
 
-    def _add_data_to_prometheus_structure(self, status, status_data, job, name):
+    def _add_data_to_prometheus_structure(self, status, status_data, name):
+        agent = status_data.get('builtOn', '')
+        label_values = [name, agent]
         # If there's a null result, we want to pass.
         if status_data.get('duration', 0):
-            self._prometheus_metrics[status]['duration'].add_metric([name], status_data.get('duration') / 1000.0)
+            self._prometheus_metrics[status]['duration'].add_metric(label_values, status_data.get('duration') / 1000.0)
         if status_data.get('timestamp', 0):
-            self._prometheus_metrics[status]['timestamp'].add_metric([name], status_data.get('timestamp') / 1000.0)
+            self._prometheus_metrics[status]['timestamp'].add_metric(label_values, status_data.get('timestamp') / 1000.0)
         if status_data.get('number', 0):
-            self._prometheus_metrics[status]['number'].add_metric([name], status_data.get('number'))
+            self._prometheus_metrics[status]['number'].add_metric(label_values, status_data.get('number'))
         actions_metrics = status_data.get('actions', [{}])
         for metric in actions_metrics:
             if metric.get('queuingDurationMillis', False):
-                self._prometheus_metrics[status]['queuingDurationMillis'].add_metric([name], metric.get('queuingDurationMillis') / 1000.0)
+                self._prometheus_metrics[status]['queuingDurationMillis'].add_metric(label_values, metric.get('queuingDurationMillis') / 1000.0)
             if metric.get('totalDurationMillis', False):
-                self._prometheus_metrics[status]['totalDurationMillis'].add_metric([name], metric.get('totalDurationMillis') / 1000.0)
+                self._prometheus_metrics[status]['totalDurationMillis'].add_metric(label_values, metric.get('totalDurationMillis') / 1000.0)
             if metric.get('skipCount', False):
-                self._prometheus_metrics[status]['skipCount'].add_metric([name], metric.get('skipCount'))
+                self._prometheus_metrics[status]['skipCount'].add_metric(label_values, metric.get('skipCount'))
             if metric.get('failCount', False):
-                self._prometheus_metrics[status]['failCount'].add_metric([name], metric.get('failCount'))
+                self._prometheus_metrics[status]['failCount'].add_metric(label_values, metric.get('failCount'))
             if metric.get('totalCount', False):
-                self._prometheus_metrics[status]['totalCount'].add_metric([name], metric.get('totalCount'))
+                self._prometheus_metrics[status]['totalCount'].add_metric(label_values, metric.get('totalCount'))
                 # Calculate passCount by subtracting fails and skips from totalCount
                 passcount = metric.get('totalCount') - metric.get('failCount') - metric.get('skipCount')
-                self._prometheus_metrics[status]['passCount'].add_metric([name], passcount)
+                self._prometheus_metrics[status]['passCount'].add_metric(label_values, passcount)
 
 
 def parse_args():
