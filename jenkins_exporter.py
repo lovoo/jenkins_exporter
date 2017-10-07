@@ -5,7 +5,7 @@ import time
 import requests
 import argparse
 from pprint import pprint
-
+import json
 import os
 from sys import exit
 from prometheus_client import start_http_server
@@ -20,11 +20,12 @@ class JenkinsCollector(object):
                 "lastStableBuild", "lastSuccessfulBuild", "lastUnstableBuild",
                 "lastUnsuccessfulBuild"]
 
-    def __init__(self, target, user, password, verify_tls):
+    def __init__(self, target, user, password, verify_tls, job_list=[]):
         self._target = target.rstrip("/")
         self._user = user
         self._password = password
         self._verify_tls = verify_tls
+        self._jobs_list=jobs_list
 
     def collect(self):
         # Request data from Jenkins
@@ -43,6 +44,15 @@ class JenkinsCollector(object):
             for metric in self._prometheus_metrics[status].values():
                 yield metric
 
+    def job_in_list(self, job_to_search):
+            if self._jobs_list == []:
+                return True
+            for job in self._jobs_list['jobs']:
+                if job['name'] == job_to_search:
+                    return True
+            return False
+
+    
     def _request_data(self):
         # Request exactly the information we need from Jenkins
         url = '{0}/api/json'.format(self._target)
@@ -53,6 +63,7 @@ class JenkinsCollector(object):
             'tree': tree,
         }
 
+
         def parsejobs(myurl):
             # params = tree: jobs[name,lastBuild[number,timestamp,duration,actions[queuingDurationMillis...
             response = requests.get(myurl, params=params, verify=self._verify_tls, auth=(self._user, self._password))
@@ -61,14 +72,17 @@ class JenkinsCollector(object):
             result = response.json()
             if DEBUG:
                 pprint(result)
+                pprint(response.headers['X-Jenkins'])
 
             jobs = []
             for job in result['jobs']:
-                if job['_class'] == 'com.cloudbees.hudson.plugins.folder.Folder' or \
-                   job['_class'] == 'org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject':
-                    jobs += parsejobs(job['url'] + '/api/json')
-                else:
-                    jobs.append(job)
+                if re.match('^2',response.headers['X-Jenkins']):
+                    if job['_class'] == 'com.cloudbees.hudson.plugins.folder.Folder' or \
+                    job['_class'] == 'org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject':
+                        jobs += parsejobs(job['url'] + '/api/json')
+                    else:
+                        if self.job_in_list(job['name']):
+                            jobs.append(job)
             return jobs
 
         return parsejobs(url)
@@ -196,16 +210,39 @@ def parse_args():
         default=''
     )
 
+    parser.add_argument(
+        '-f', '--jobsfile',
+        metavar='jobsfile',
+        required=False,
+        help='json file with the jobs to monitor',
+        default=os.environ.get('JOBS_FILE','')
+    )
+
     return parser.parse_args()
 
+def set_args():
+    os.environ['JENKINS_SERVER']='http://mydtbld0181.hpeswlab.net:8080'
+#    os.environ['JOBS_FILE']='jobs.json'
+
+def get_filter_jobs(jobs_file):
+    if jobs_file != '':
+        try:
+            with open(jobs_file, 'r') as jFile:
+                jString=jFile.read()
+                return json.loads(jString)
+        except IOError as e:
+            print("WARNING: cannot open jobs file \"{0}\". I/O error({1}): {2}. Ignoring filter file.".format(jobs_file,e.errno, e.strerror))
+    return[]
 
 def main():
     try:
+        set_args()
         args = parse_args()
         port = int(args.port)
         domain = args.domain
+        jobs_filter = get_filter_jobs(str(args.jobsfile))
         verify_tls = not args.disable_cert_verification
-        REGISTRY.register(JenkinsCollector(args.jenkins, args.user, args.password, verify_tls))
+        REGISTRY.register(JenkinsCollector(args.jenkins, args.user, args.password, verify_tls, job_filter))
         start_http_server(port)
         if domain != '':
             start_http_server(port, domain)
