@@ -178,6 +178,7 @@ def parse_args():
         help='Listen to this port',
         default=int(os.environ.get('VIRTUAL_PORT', '9118'))
     )
+
     parser.add_argument(
         '--disable-cert-verification',
         required=False,
@@ -186,6 +187,15 @@ def parse_args():
         help='Disable TLS Cert Verification',
         default=False
     )
+
+    parser.add_argument(
+        '-d', '--domain',
+        metavar='domain',
+        required=False,
+        help='Listen to this domain',
+        default=''
+    )
+
     return parser.parse_args()
 
 
@@ -193,9 +203,14 @@ def main():
     try:
         args = parse_args()
         port = int(args.port)
+        domain = args.domain
         verify_tls = not args.disable_cert_verification
         REGISTRY.register(JenkinsCollector(args.jenkins, args.user, args.password, verify_tls))
         start_http_server(port)
+        if domain != '':
+            start_http_server(port, domain)
+        else:
+            start_http_server(port)
         print "Polling %s. Serving at port: %s" % (args.jenkins, port)
         while True:
             time.sleep(1)
