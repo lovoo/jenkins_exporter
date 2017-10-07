@@ -16,9 +16,9 @@ DEBUG = int(os.environ.get('DEBUG', '0'))
 
 class JenkinsCollector(object):
     # The build statuses we want to export about.
-    statuses = ["lastBuild", "lastCompletedBuild", "lastFailedBuild",
+    statuses = ["healthReport", "lastBuild", "lastCompletedBuild", "lastFailedBuild",
                 "lastStableBuild", "lastSuccessfulBuild", "lastUnstableBuild",
-                "lastUnsuccessfulBuild"]
+                "lastUnsuccessfulBuild", "color"]
 
     def __init__(self, target, user, password, verify_tls, job_list=[]):
         self._target = target.rstrip("/")
@@ -56,7 +56,7 @@ class JenkinsCollector(object):
     def _request_data(self):
         # Request exactly the information we need from Jenkins
         url = '{0}/api/json'.format(self._target)
-        jobs = "[number,timestamp,duration,builtOn,actions[queuingDurationMillis,totalDurationMillis," \
+        jobs = "[color,score,number,timestamp,duration,actions[queuingDurationMillis,totalDurationMillis," \
                "skipCount,failCount,totalCount,passCount]]"
         tree = 'jobs[name,url,color,{0}]'.format(','.join([s + jobs for s in self.statuses]))
         params = {
@@ -121,7 +121,13 @@ class JenkinsCollector(object):
                                       'Jenkins build total counts for {0}'.format(status), labels=labels),
                 'passCount':
                     GaugeMetricFamily('jenkins_job_{0}_pass_count'.format(snake_case),
-                                      'Jenkins build pass counts for {0}'.format(status), labels=labels),
+                                      'Jenkins build pass counts for {0}'.format(status), labels=["jobname"]),
+                'health':
+                    GaugeMetricFamily('jenkins_job_{0}_health'.format(snake_case),
+                                      'Jenkins health for {0}'.format(status), labels=["jobname"]),
+                'status':
+                    GaugeMetricFamily('jenkins_job_{0}_status'.format(snake_case),
+                                      'Jenkins status for {0}'.format(status), labels=["jobname"])
             }
         self._prometheus_metrics['lastBuild']['is_running'] = GaugeMetricFamily('jenkins_job_last_build_is_running',
                                                                                 'Jenkins build is running now for lastBuild', labels=["jobname"])
@@ -130,7 +136,13 @@ class JenkinsCollector(object):
         for status in self.statuses:
             if status in job.keys():
                 status_data = job[status] or {}
-                self._add_data_to_prometheus_structure(status, status_data, name)
+                if isinstance(status_data, basestring):
+                    status_data = {status: status_data}
+                if type(status_data) is list:
+                    for status_datum in status_data:
+                        self._add_data_to_prometheus_structure(status, status_datum, job, name)
+                else:
+                    self._add_data_to_prometheus_structure(status, status_data, job, name)
 
     def _add_data_to_prometheus_structure(self, status, status_data, name):
         agent = status_data.get('builtOn', '')
@@ -141,7 +153,11 @@ class JenkinsCollector(object):
         if status_data.get('timestamp', 0):
             self._prometheus_metrics[status]['timestamp'].add_metric(label_values, status_data.get('timestamp') / 1000.0)
         if status_data.get('number', 0):
-            self._prometheus_metrics[status]['number'].add_metric(label_values, status_data.get('number'))
+            self._prometheus_metrics[status]['number'].add_metric([name], status_data.get('number'))
+        if status_data.get('score') is not None:
+            self._prometheus_metrics[status]['health'].add_metric([name], status_data.get('score'))
+        if status_data.get('color') is not None:
+            self._prometheus_metrics[status]['status'].add_metric([name], 1 if (status_data.get('color').startswith('blue')) else 0)
         actions_metrics = status_data.get('actions', [{}])
         for metric in actions_metrics:
             if metric.get('queuingDurationMillis', False):
