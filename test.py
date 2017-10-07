@@ -9,7 +9,7 @@ class JenkinsCollectorTestCase(unittest.TestCase):
     # TODO: add more test cases
 
     def test_prometheus_metrics(self):
-        exporter = JenkinsCollector('', '', '')
+        exporter = JenkinsCollector('', '', '', True)
         self.assertFalse(hasattr(exporter, '_prometheus_metrics'))
 
         exporter._setup_empty_prometheus_metrics()
