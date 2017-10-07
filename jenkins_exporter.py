@@ -48,7 +48,7 @@ class JenkinsCollector(object):
         url = '{0}/api/json'.format(self._target)
         jobs = "[number,timestamp,duration,builtOn,actions[queuingDurationMillis,totalDurationMillis," \
                "skipCount,failCount,totalCount,passCount]]"
-        tree = 'jobs[name,url,{0}]'.format(','.join([s + jobs for s in self.statuses]))
+        tree = 'jobs[name,url,color,{0}]'.format(','.join([s + jobs for s in self.statuses]))
         params = {
             'tree': tree,
         }
@@ -109,6 +109,8 @@ class JenkinsCollector(object):
                     GaugeMetricFamily('jenkins_job_{0}_pass_count'.format(snake_case),
                                       'Jenkins build pass counts for {0}'.format(status), labels=labels),
             }
+        self._prometheus_metrics['lastBuild']['is_running'] = GaugeMetricFamily('jenkins_job_last_build_is_running',
+                                                                                'Jenkins build is running now for lastBuild', labels=["jobname"])
 
     def _get_metrics(self, name, job):
         for status in self.statuses:
