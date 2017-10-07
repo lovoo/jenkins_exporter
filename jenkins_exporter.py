@@ -25,7 +25,7 @@ class JenkinsCollector(object):
         self._user = user
         self._password = password
         self._verify_tls = verify_tls
-        self._jobs_list=jobs_list
+        self._job_list=job_list
 
     def collect(self):
         # Request data from Jenkins
@@ -45,9 +45,9 @@ class JenkinsCollector(object):
                 yield metric
 
     def job_in_list(self, job_to_search):
-            if self._jobs_list == []:
+            if self._job_list == []:
                 return True
-            for job in self._jobs_list['jobs']:
+            for job in self._job_list['jobs']:
                 if job['name'] == job_to_search:
                     return True
             return False
