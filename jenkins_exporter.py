@@ -22,8 +22,9 @@ class JenkinsCollector(object):
 
     def __init__(self, target, user, password):
         self._target = target.rstrip("/")
-        self._user = user
-        self._password = password
+        self._auth = None
+        if user and password:
+            self._auth = (user, password)
 
     def collect(self):
         self._setup_empty_prometheus_metrics()
@@ -56,10 +57,17 @@ class JenkinsCollector(object):
         }
 
         def parsejobs(myurl):
-            # params = tree: jobs[name,lastBuild[number,timestamp,duration,actions[queuingDurationMillis...
-            response = requests.get(myurl, params=params, auth=(self._user, self._password))
+            initial_time = time.time()
+            response = requests.get(myurl, params=params, auth=self._auth)
+            latency = time.time() - initial_time
+            self._prom_metrics['jenkins_latency'].add_metric(['/api/json'], latency)
+            self._prom_metrics['jenkins_response'].add_metric(
+                ['/api/json'], response.status_code)
             if response.status_code != requests.codes.ok:
+                self._prom_metrics['jenkins_fetch_ok'].add_metric(['/api/json'], 0)
+                print url, response.status_code
                 return[]
+            self._prom_metrics['jenkins_fetch_ok'].add_metric(['/api/json'], 1)
             result = response.json()
             if DEBUG:
                 pprint(result)
