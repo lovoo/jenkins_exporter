@@ -26,10 +26,10 @@ class JenkinsCollector(object):
         self._password = password
 
     def collect(self):
+        self._setup_empty_prometheus_metrics()
+
         # Request data from Jenkins
         jobs = self._request_data()
-
-        self._setup_empty_prometheus_metrics()
 
         for job in jobs:
             name = job['name']
@@ -41,6 +41,9 @@ class JenkinsCollector(object):
         for status in self.statuses:
             for metric in self._prometheus_metrics[status].values():
                 yield metric
+
+        for metric in self._prom_metrics.itervalues():
+            yield metric
 
     def _request_data(self):
         # Request exactly the information we need from Jenkins
@@ -107,6 +110,52 @@ class JenkinsCollector(object):
                     GaugeMetricFamily('jenkins_job_{0}_pass_count'.format(snake_case),
                                       'Jenkins build pass counts for {0}'.format(status), labels=["jobname"]),
             }
+
+        self._prom_metrics = {}
+        self._prom_metrics['online'] = GaugeMetricFamily(
+            'jenkins_node_online',
+            'If the node is online.',
+            labels=['node'])
+        self._prom_metrics['temporarily_offline'] = GaugeMetricFamily(
+            'jenkins_node_temporarily_offline',
+            'If the node is offline only temporarily.',
+            labels=['node']
+        )
+        self._prom_metrics['busy'] = GaugeMetricFamily(
+            'jenkins_node_busy',
+            'If the node is busy.',
+            labels=['node']
+        )
+        self._prom_metrics['skew'] = GaugeMetricFamily(
+            'jenkins_node_clock_skew_seconds',
+            'Estimated clock skew from the Jenkins master in seconds.',
+            labels=['node']
+        )
+        self._prom_metrics['queue'] = GaugeMetricFamily(
+            'jenkins_job_queue_time_seconds',
+            'Time the oldest pending task has spent in the queue.',
+            labels=['jenkins_job', 'jenkins_job_config']
+        )
+        self._prom_metrics['queue_count'] = GaugeMetricFamily(
+            'jenkins_job_queue_size',
+            'Number of tasks currently in the queue.',
+            labels=['jenkins_job', 'jenkins_job_config']
+        )
+        self._prom_metrics['jenkins_latency'] = GaugeMetricFamily(
+            'jenkins_api_latency_seconds',
+            'Latency when making API calls to the Jenkins master.',
+            labels=['url']
+        )
+        self._prom_metrics['jenkins_response'] = GaugeMetricFamily(
+            'jenkins_api_response_code',
+            'HTTP response code of the Jenkins API.',
+            labels=['url']
+        )
+        self._prom_metrics['jenkins_fetch_ok'] = GaugeMetricFamily(
+            'jenkins_api_fetch_ok',
+            'If the HTTP response of Jenkins was successful',
+            labels=['url']
+        )
 
     def _get_metrics(self, name, job):
         for status in self.statuses:
