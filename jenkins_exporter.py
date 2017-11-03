@@ -1,5 +1,6 @@
 #!/usr/bin/python
 
+import collections
 import re
 import time
 import requests
@@ -38,6 +39,9 @@ class JenkinsCollector(object):
                 print "Found Job: %s" % name
                 pprint(job)
             self._get_metrics(name, job)
+
+        self._request_nodes()
+        self._request_queue(jobs)
 
         for status in self.statuses:
             for metric in self._prometheus_metrics[status].values():
@@ -78,6 +82,104 @@ class JenkinsCollector(object):
             return jobs
 
         return parsejobs(url)
+
+    def _request_queue(self, jobs):
+        url = '{0}/queue/api/json'.format(self._target)
+        tree = 'items[inQueueSince,task[name]]'
+        params = {
+            'tree': tree,
+        }
+
+        initial_time = time.time()
+        response = requests.get(url, params=params, auth=self._auth)
+        latency = time.time() - initial_time
+        self._prom_metrics['jenkins_latency'].add_metric(['/queue/api/json'], latency)
+        self._prom_metrics['jenkins_response'].add_metric(
+            ['/queue/api/json'], response.status_code)
+        if response.status_code != requests.codes.ok:
+            self._prom_metrics['jenkins_fetch_ok'].add_metric(['/queue/api/json'], 0)
+            print url, response.status_code
+            return[]
+        self._prom_metrics['jenkins_fetch_ok'].add_metric(['/queue/api/json'], 1)
+        result = response.json()
+
+        # Use '__none__' to signify jobs without multiple configurations.
+        null_configuration_name = '__none__'
+
+        job_names = collections.defaultdict(list)
+        for job in jobs:
+            if 'activeConfigurations' in job:
+                for config in job['activeConfigurations']:
+                    job_names[job['name']].append(config['name'])
+            else:
+                job_names[job['name']].append(null_configuration_name)
+
+        max_queue_time = collections.defaultdict(lambda: collections.defaultdict(
+            lambda: 0.0))
+        task_count = collections.defaultdict(lambda: collections.defaultdict(lambda: 0))
+        for task in result['items']:
+            job_name = task['task']['name']
+            config_name = null_configuration_name
+            for causes in task.get('actions', []):
+                for cause in causes.get('causes', []):
+                    upstream_proj = cause.get('upstreamProject')
+                    if upstream_proj:
+                        # If we have an upstream project who has a configuration named
+                        # like us, then change our name to job_name->configuration.
+                        # Otherwise the upstream project is just the job that called us
+                        # and we have only one configuration. In this case, ignore the
+                        # upstream project.
+                        if job_name in job_names[upstream_proj]:
+                            config_name = job_name
+                            job_name = upstream_proj
+            old_count = task_count[job_name][config_name]
+            task_count[job_name][config_name] = old_count + 1
+
+            queuing_time = initial_time - (task['inQueueSince'] / 1000.0)
+            old_max = max_queue_time[job_name][config_name]
+            max_queue_time[job_name][config_name] = max(old_max, queuing_time)
+
+        for job, configs in job_names.iteritems():
+            for config in configs:
+                self._prom_metrics['queue'].add_metric(
+                    [job, config], max_queue_time[job][config])
+                self._prom_metrics['queue_count'].add_metric(
+                    [job, config], task_count[job][config])
+
+    def _request_nodes(self):
+        url = '{0}/computer/api/json'.format(self._target)
+        tree = 'computer[displayName,offline,temporarilyOffline,idle,monitorData[*]]'
+        params = {
+            'tree': tree,
+        }
+
+        initial_time = time.time()
+        response = requests.get(url, params=params, auth=self._auth)
+        latency = time.time() - initial_time
+        self._prom_metrics['jenkins_latency'].add_metric(['/computer/api/json'], latency)
+        self._prom_metrics['jenkins_response'].add_metric(
+            ['/computer/api/json'], response.status_code)
+        if response.status_code != requests.codes.ok:
+            self._prom_metrics['jenkins_fetch_ok'].add_metric(['/computer/api/json'], 0)
+            print url, response.status_code
+            return[]
+        self._prom_metrics['jenkins_fetch_ok'].add_metric(['/computer/api/json'], 1)
+        result = response.json()
+
+        for node in result.get('computer', []):
+            self._prom_metrics['online'].add_metric(
+                [node['displayName']], not node.get('offline', True))
+            self._prom_metrics['temporarily_offline'].add_metric(
+                [node['displayName']], node.get('temporarilyOffline', False))
+            self._prom_metrics['busy'].add_metric(
+                [node['displayName']], not node.get('idle', False))
+            monitor_data = node.get('monitorData', {})
+            clockmonitor = (monitor_data or {}).get(
+                'hudson.node_monitors.ClockMonitor', {})
+            clock_diff = (clockmonitor or {}).get('diff')
+            if clock_diff is not None:
+                self._prom_metrics['skew'].add_metric(
+                    [node['displayName']], clock_diff / 1000.0)
 
     def _setup_empty_prometheus_metrics(self):
         # The metrics we want to export.
