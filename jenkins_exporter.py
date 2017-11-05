@@ -32,7 +32,7 @@ class JenkinsCollector(object):
         self._setup_empty_prometheus_metrics()
 
         for job in jobs:
-            name = job['name']
+            name = job['fullName']
             if DEBUG:
                 print "Found Job: %s" % name
                 pprint(job)
@@ -45,9 +45,9 @@ class JenkinsCollector(object):
     def _request_data(self):
         # Request exactly the information we need from Jenkins
         url = '{0}/api/json'.format(self._target)
-        jobs = "[number,timestamp,duration,actions[queuingDurationMillis,totalDurationMillis," \
+        jobs = "[fullName,number,timestamp,duration,actions[queuingDurationMillis,totalDurationMillis," \
                "skipCount,failCount,totalCount,passCount]]"
-        tree = 'jobs[name,url,{0}]'.format(','.join([s + jobs for s in self.statuses]))
+        tree = 'jobs[fullName,url,{0}]'.format(','.join([s + jobs for s in self.statuses]))
         params = {
             'tree': tree,
         }
