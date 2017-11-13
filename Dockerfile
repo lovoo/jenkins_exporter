@@ -12,4 +12,3 @@ EXPOSE 9118
 ENV JENKINS_SERVER=http://jenkins:8080 VIRTUAL_PORT=9118 DEBUG=0
 
 ENTRYPOINT [ "python", "-u", "./jenkins_exporter.py" ]
-CMD []
