@@ -64,6 +64,7 @@ class JenkinsCollector(object):
             jobs = []
             for job in result['jobs']:
                 if job['_class'] == 'com.cloudbees.hudson.plugins.folder.Folder' or \
+                   job['_class'] == 'jenkins.branch.OrganizationFolder' or \
                    job['_class'] == 'org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject':
                     jobs += parsejobs(job['url'] + '/api/json')
                 else:
