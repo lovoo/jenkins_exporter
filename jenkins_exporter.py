@@ -15,6 +15,10 @@ from prometheus_client.core import GaugeMetricFamily, REGISTRY
 DEBUG = int(os.environ.get('DEBUG', '0'))
 
 
+# Use '__none__' to signify jobs without multiple configurations.
+NULL_CONFIGURATION_NAME = '__none__'
+
+
 class JenkinsCollector(object):
     # The build statuses we want to export about.
     statuses = ["lastBuild", "lastCompletedBuild", "lastFailedBuild",
@@ -31,7 +35,7 @@ class JenkinsCollector(object):
         self._setup_empty_prometheus_metrics()
 
         # Request data from Jenkins
-        jobs = self._request_data()
+        jobs, config_mapping = self._request_data()
 
         for job in jobs:
             name = job['name']
@@ -41,7 +45,7 @@ class JenkinsCollector(object):
             self._get_metrics(name, job)
 
         self._request_nodes()
-        self._request_queue(jobs)
+        self._request_queue(jobs, config_mapping)
 
         for status in self.statuses:
             for metric in self._prometheus_metrics[status].values():
@@ -55,7 +59,8 @@ class JenkinsCollector(object):
         url = '{0}/api/json'.format(self._target)
         jobs = "[number,timestamp,duration,actions[queuingDurationMillis,totalDurationMillis," \
                "skipCount,failCount,totalCount,passCount]]"
-        tree = 'jobs[name,url,{0}]'.format(','.join([s + jobs for s in self.statuses]))
+        tree = 'jobs[name,url,activeConfigurations[name,url],{0}]'.format(
+            ','.join([s + jobs for s in self.statuses]))
         params = {
             'tree': tree,
         }
@@ -81,11 +86,18 @@ class JenkinsCollector(object):
                 jobs.append(job)
             return jobs
 
-        return parsejobs(url)
+        jobs = parsejobs(url)
+        config_mapping = {}
+        for job in jobs:
+            for config in job.get('activeConfigurations', []):
+                config_mapping[config['url']] = (job['name'], config['name'])
+            config_mapping[job['url']] = (job['name'], NULL_CONFIGURATION_NAME)
 
-    def _request_queue(self, jobs):
+        return jobs, config_mapping
+
+    def _request_queue(self, jobs, config_mapping):
         url = '{0}/queue/api/json'.format(self._target)
-        tree = 'items[inQueueSince,task[name]]'
+        tree = 'items[inQueueSince,task[url]]'
         params = {
             'tree': tree,
         }
@@ -103,35 +115,27 @@ class JenkinsCollector(object):
         self._prom_metrics['jenkins_fetch_ok'].add_metric(['/queue/api/json'], 1)
         result = response.json()
 
-        # Use '__none__' to signify jobs without multiple configurations.
-        null_configuration_name = '__none__'
-
-        job_names = collections.defaultdict(list)
-        for job in jobs:
-            if 'activeConfigurations' in job:
-                for config in job['activeConfigurations']:
-                    job_names[job['name']].append(config['name'])
-            else:
-                job_names[job['name']].append(null_configuration_name)
-
         max_queue_time = collections.defaultdict(lambda: collections.defaultdict(
             lambda: 0.0))
         task_count = collections.defaultdict(lambda: collections.defaultdict(lambda: 0))
+
         for task in result['items']:
-            job_name = task['task']['name']
-            config_name = null_configuration_name
-            for causes in task.get('actions', []):
-                for cause in causes.get('causes', []):
-                    upstream_proj = cause.get('upstreamProject')
-                    if upstream_proj:
-                        # If we have an upstream project who has a configuration named
-                        # like us, then change our name to job_name->configuration.
-                        # Otherwise the upstream project is just the job that called us
-                        # and we have only one configuration. In this case, ignore the
-                        # upstream project.
-                        if job_name in job_names[upstream_proj]:
-                            config_name = job_name
-                            job_name = upstream_proj
+            task_url = task.get('task', {}).get('url', '')
+            job_name, config_name = (None, None)
+            # Look for the longest matching URL in the config mapping.
+            match_length = 0
+            for url, match in config_mapping.iteritems():
+                if task_url.startswith(url) and len(url) > match_length:
+                    job_name, config_name = match
+                    match_length = len(url)
+
+            if job_name is None or config_name is None:
+                # We found a job or configuration that wasn't in the mapping. This can
+                # happen if the job was added after we got the mapping in _request_data().
+                # The next scan should have the job in the mapping.
+                self._prom_metrics['dropped_job_urls'].add_metric([task_url], 1)
+                continue
+
             old_count = task_count[job_name][config_name]
             task_count[job_name][config_name] = old_count + 1
 
@@ -139,12 +143,12 @@ class JenkinsCollector(object):
             old_max = max_queue_time[job_name][config_name]
             max_queue_time[job_name][config_name] = max(old_max, queuing_time)
 
-        for job, configs in job_names.iteritems():
-            for config in configs:
-                self._prom_metrics['queue'].add_metric(
-                    [job, config], max_queue_time[job][config])
-                self._prom_metrics['queue_count'].add_metric(
-                    [job, config], task_count[job][config])
+        # Note: this is itervalues(), not iteritems().
+        for job_name, config_name in config_mapping.itervalues():
+            self._prom_metrics['queue'].add_metric(
+                [job_name, config_name], max_queue_time[job_name][config_name])
+            self._prom_metrics['queue_count'].add_metric(
+                [job_name, config_name], task_count[job_name][config_name])
 
     def _request_nodes(self):
         url = '{0}/computer/api/json'.format(self._target)
@@ -261,6 +265,11 @@ class JenkinsCollector(object):
             'jenkins_api_fetch_ok',
             'If the HTTP response of Jenkins was successful',
             labels=['url']
+        )
+        self._prom_metrics['dropped_job_urls'] = GaugeMetricFamily(
+            'jenkins_dropped_job_urls',
+            "Job URls that weren't found in the configuration mapping.",
+            labels=['url'],
         )
 
     def _get_metrics(self, name, job):
