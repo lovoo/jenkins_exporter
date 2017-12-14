@@ -55,7 +55,7 @@ class JenkinsCollector(object):
                 pprint(job)
             self._get_metrics(name, job)
 
-        self._request_nodes()
+        self._request_nodes(config_mapping)
         self._request_queue(jobs, config_mapping)
 
         for status in self.statuses:
@@ -146,12 +146,14 @@ class JenkinsCollector(object):
             self._prom_metrics['queue_count'].add_metric(
                 [job_name, job_config], task_count[job_name][job_config])
 
-    def _request_nodes(self):
-        tree = 'computer[displayName,offline,temporarilyOffline,idle,monitorData[*]]'
-        result, _ = self._jenkins_api_call('/computer/api/json', tree)
+    def _request_nodes(self, config_mapping):
+        tree = ('computer[displayName,offline,temporarilyOffline,idle,monitorData[*],'
+                'executors[currentExecutable[url,number,timestamp]]]')
+        result, initial_time = self._jenkins_api_call('/computer/api/json', tree)
         if result is None:
             return []
 
+        running_builds = []
         for node in result.get('computer', []):
             self._prom_metrics['online'].add_metric(
                 [node['displayName']], not node.get('offline', True))
@@ -166,6 +168,13 @@ class JenkinsCollector(object):
             if clock_diff is not None:
                 self._prom_metrics['skew'].add_metric(
                     [node['displayName']], clock_diff / 1000.0)
+
+            for executor in node['executors']:
+                if executor['currentExecutable'] is not None:
+                    running_builds.append(executor['currentExecutable'])
+
+        self._add_running_build_data_to_prometheus(
+            running_builds, config_mapping, initial_time)
 
     def _setup_empty_prometheus_metrics(self):
         # The metrics we want to export.
@@ -253,12 +262,75 @@ class JenkinsCollector(object):
             "Job URls that weren't found in the configuration mapping.",
             labels=['url'],
         )
+        self._prom_metrics['executing_builds'] = GaugeMetricFamily(
+            'jenkins_executing_builds',
+            'Number of currently executing builds.',
+            labels=['jenkins_job', 'jenkins_job_config'],
+        )
+        self._prom_metrics['max_currently_running_duration'] = GaugeMetricFamily(
+            'jenkins_max_currently_running_duration_seconds',
+            'How long the longest-running still-executing build has taken.',
+            labels=['jenkins_job', 'jenkins_job_config'],
+        )
+        self._prom_metrics['max_currently_running_build_number'] = GaugeMetricFamily(
+            'jenkins_max_currently_running_build_number',
+            'Build number of the longest-running still-executing build.',
+            labels=['jenkins_job', 'jenkins_job_config'],
+        )
 
     def _get_metrics(self, name, job):
         for status in self.statuses:
             if status in job.keys():
                 status_data = job[status] or {}
                 self._add_data_to_prometheus_structure(status, status_data, job, name)
+
+    def _add_running_build_data_to_prometheus(self, builds, config_mapping, request_time):
+        """Calculate metrics on running builds and report those to Prometheus.
+
+        Because we calculate running duration off a timestamp, we need request time (the
+        time the API call was made) to subtract from.
+        """
+        executing_builds_breakdown = collections.defaultdict(
+            lambda: collections.defaultdict(list))
+        for build in builds:
+            build_url = build.get('url', '')
+            job_name, job_config = map_url_to_job_config(build_url, config_mapping)
+
+            if job_name is None or job_config is None:
+                # We found a job or configuration that wasn't in the mapping. This can
+                # happen if the job was added after we got the mapping in _request_data().
+                # The next scan should have the job in the mapping.
+                self._prom_metrics['dropped_job_urls'].add_metric([build_url], 1)
+                continue
+
+            executing_builds_breakdown[job_name][job_config].append(build)
+
+        # Report over all job configs here, so things return to zero when they're done.
+        for job_name, job_config in config_mapping.itervalues():
+            builds = executing_builds_breakdown[job_name][job_config]
+
+            self._prom_metrics['executing_builds'].add_metric(
+                [job_name, job_config], len(builds))
+
+            if builds:
+                # It looks like we can't get the current duration directly from this
+                # endpoint, so we subtract off the 'current' time here. This leaves in
+                # network jitter and any node/exporter clock skew, but prevents making a
+                # second trip querying all the jobs.
+                build_durations = [
+                    (b['number'], request_time - (b['timestamp'] / 1000.0))
+                    for b in builds
+                ]
+                max_build_num, max_build_dur = max(build_durations, key=lambda x: x[1])
+                max_build_dur = max(max_build_dur, 0)  # Clamp negative numbers to zero.
+            else:
+                max_build_num = -1
+                max_build_dur = 0
+
+            self._prom_metrics['max_currently_running_duration'].add_metric(
+                [job_name, job_config], max_build_dur)
+            self._prom_metrics['max_currently_running_build_number'].add_metric(
+                [job_name, job_config], max_build_num)
 
     def _add_data_to_prometheus_structure(self, status, status_data, job, name):
         # If there's a null result, we want to pass.
