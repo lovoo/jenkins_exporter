@@ -19,6 +19,17 @@ DEBUG = int(os.environ.get('DEBUG', '0'))
 NULL_CONFIGURATION_NAME = '__none__'
 
 
+def map_url_to_job_config(url, config_mapping):
+    """Return job name and config of the longest matching URL in the config mapping."""
+    job_name, job_config = (None, None)
+    match_length = 0
+    for candidate_url, match in config_mapping.iteritems():
+        if url.startswith(candidate_url) and len(candidate_url) > match_length:
+            job_name, job_config = match
+            match_length = len(candidate_url)
+    return job_name, job_config
+
+
 class JenkinsCollector(object):
     # The build statuses we want to export about.
     statuses = ["lastBuild", "lastCompletedBuild", "lastFailedBuild",
@@ -112,13 +123,7 @@ class JenkinsCollector(object):
 
         for task in result['items']:
             task_url = task.get('task', {}).get('url', '')
-            job_name, job_config = (None, None)
-            # Look for the longest matching URL in the config mapping.
-            match_length = 0
-            for url, match in config_mapping.iteritems():
-                if task_url.startswith(url) and len(url) > match_length:
-                    job_name, job_config = match
-                    match_length = len(url)
+            job_name, job_config = map_url_to_job_config(task_url, config_mapping)
 
             if job_name is None or job_config is None:
                 # We found a job or configuration that wasn't in the mapping. This can
