@@ -19,6 +19,17 @@ DEBUG = int(os.environ.get('DEBUG', '0'))
 NULL_CONFIGURATION_NAME = '__none__'
 
 
+def map_url_to_job_config(url, config_mapping):
+    """Return job name and config of the longest matching URL in the config mapping."""
+    job_name, job_config = (None, None)
+    match_length = 0
+    for candidate_url, match in config_mapping.iteritems():
+        if url.startswith(candidate_url) and len(candidate_url) > match_length:
+            job_name, job_config = match
+            match_length = len(candidate_url)
+    return job_name, job_config
+
+
 class JenkinsCollector(object):
     # The build statuses we want to export about.
     statuses = ["lastBuild", "lastCompletedBuild", "lastFailedBuild",
@@ -44,7 +55,7 @@ class JenkinsCollector(object):
                 pprint(job)
             self._get_metrics(name, job)
 
-        self._request_nodes()
+        self._request_nodes(config_mapping)
         self._request_queue(jobs, config_mapping)
 
         for status in self.statuses:
@@ -54,39 +65,44 @@ class JenkinsCollector(object):
         for metric in self._prom_metrics.itervalues():
             yield metric
 
-    def _request_data(self):
-        # Request exactly the information we need from Jenkins
-        url = '{0}/api/json'.format(self._target)
-        jobs = "[number,timestamp,duration,actions[queuingDurationMillis,totalDurationMillis," \
-               "skipCount,failCount,totalCount,passCount]]"
-        tree = 'jobs[name,url,activeConfigurations[name,url],{0}]'.format(
-            ','.join([s + jobs for s in self.statuses]))
+    def _jenkins_api_call(self, url_fragment, tree):
+        """Make a Jenkins API call and return the parsed result."""
+        url = '%s%s' % (self._target, url_fragment)
         params = {
             'tree': tree,
         }
 
-        def parsejobs(myurl):
-            initial_time = time.time()
-            response = requests.get(myurl, params=params, auth=self._auth)
-            latency = time.time() - initial_time
-            self._prom_metrics['jenkins_latency'].add_metric(['/api/json'], latency)
-            self._prom_metrics['jenkins_response'].add_metric(
-                ['/api/json'], response.status_code)
-            if response.status_code != requests.codes.ok:
-                self._prom_metrics['jenkins_fetch_ok'].add_metric(['/api/json'], 0)
-                print url, response.status_code
-                return[]
-            self._prom_metrics['jenkins_fetch_ok'].add_metric(['/api/json'], 1)
-            result = response.json()
-            if DEBUG:
-                pprint(result)
+        initial_time = time.time()
+        response = requests.get(url, params=params, auth=self._auth)
+        latency = time.time() - initial_time
+        self._prom_metrics['jenkins_latency'].add_metric([url_fragment], latency)
+        self._prom_metrics['jenkins_response'].add_metric(
+            [url_fragment], response.status_code)
+        if response.status_code != requests.codes.ok:
+            self._prom_metrics['jenkins_fetch_ok'].add_metric([url_fragment], 0)
+            print url, response.status_code
+            return None
+        self._prom_metrics['jenkins_fetch_ok'].add_metric([url_fragment], 1)
 
-            jobs = []
-            for job in result['jobs']:
-                jobs.append(job)
-            return jobs
+        # We return initial_time here to provide a reference for calculations based on any
+        # timestamps found in the response.
+        return response.json(), initial_time
 
-        jobs = parsejobs(url)
+    def _request_data(self):
+        # Request exactly the information we need from Jenkins
+        jobs = "[number,timestamp,duration,actions[queuingDurationMillis,totalDurationMillis," \
+               "skipCount,failCount,totalCount,passCount]]"
+        tree = 'jobs[name,url,activeConfigurations[name,url],{0}]'.format(
+            ','.join([s + jobs for s in self.statuses]))
+
+        result, _ = self._jenkins_api_call('/api/json', tree)
+        if result is None:
+            return [], {}
+        if DEBUG:
+            pprint(result)
+
+        jobs = result['jobs']
+
         config_mapping = {}
         for job in jobs:
             for config in job.get('activeConfigurations', []):
@@ -96,24 +112,10 @@ class JenkinsCollector(object):
         return jobs, config_mapping
 
     def _request_queue(self, jobs, config_mapping):
-        url = '{0}/queue/api/json'.format(self._target)
         tree = 'items[inQueueSince,task[url]]'
-        params = {
-            'tree': tree,
-        }
-
-        initial_time = time.time()
-        response = requests.get(url, params=params, auth=self._auth)
-        latency = time.time() - initial_time
-        self._prom_metrics['jenkins_latency'].add_metric(['/queue/api/json'], latency)
-        self._prom_metrics['jenkins_response'].add_metric(
-            ['/queue/api/json'], response.status_code)
-        if response.status_code != requests.codes.ok:
-            self._prom_metrics['jenkins_fetch_ok'].add_metric(['/queue/api/json'], 0)
-            print url, response.status_code
-            return[]
-        self._prom_metrics['jenkins_fetch_ok'].add_metric(['/queue/api/json'], 1)
-        result = response.json()
+        result, initial_time = self._jenkins_api_call('/queue/api/json', tree)
+        if result is None:
+            return []
 
         max_queue_time = collections.defaultdict(lambda: collections.defaultdict(
             lambda: 0.0))
@@ -121,55 +123,37 @@ class JenkinsCollector(object):
 
         for task in result['items']:
             task_url = task.get('task', {}).get('url', '')
-            job_name, config_name = (None, None)
-            # Look for the longest matching URL in the config mapping.
-            match_length = 0
-            for url, match in config_mapping.iteritems():
-                if task_url.startswith(url) and len(url) > match_length:
-                    job_name, config_name = match
-                    match_length = len(url)
+            job_name, job_config = map_url_to_job_config(task_url, config_mapping)
 
-            if job_name is None or config_name is None:
+            if job_name is None or job_config is None:
                 # We found a job or configuration that wasn't in the mapping. This can
                 # happen if the job was added after we got the mapping in _request_data().
                 # The next scan should have the job in the mapping.
                 self._prom_metrics['dropped_job_urls'].add_metric([task_url], 1)
                 continue
 
-            old_count = task_count[job_name][config_name]
-            task_count[job_name][config_name] = old_count + 1
+            old_count = task_count[job_name][job_config]
+            task_count[job_name][job_config] = old_count + 1
 
             queuing_time = initial_time - (task['inQueueSince'] / 1000.0)
-            old_max = max_queue_time[job_name][config_name]
-            max_queue_time[job_name][config_name] = max(old_max, queuing_time)
+            old_max = max_queue_time[job_name][job_config]
+            max_queue_time[job_name][job_config] = max(old_max, queuing_time)
 
         # Note: this is itervalues(), not iteritems().
-        for job_name, config_name in config_mapping.itervalues():
+        for job_name, job_config in config_mapping.itervalues():
             self._prom_metrics['queue'].add_metric(
-                [job_name, config_name], max_queue_time[job_name][config_name])
+                [job_name, job_config], max_queue_time[job_name][job_config])
             self._prom_metrics['queue_count'].add_metric(
-                [job_name, config_name], task_count[job_name][config_name])
+                [job_name, job_config], task_count[job_name][job_config])
 
-    def _request_nodes(self):
-        url = '{0}/computer/api/json'.format(self._target)
-        tree = 'computer[displayName,offline,temporarilyOffline,idle,monitorData[*]]'
-        params = {
-            'tree': tree,
-        }
+    def _request_nodes(self, config_mapping):
+        tree = ('computer[displayName,offline,temporarilyOffline,idle,monitorData[*],'
+                'executors[currentExecutable[url,number,timestamp]]]')
+        result, initial_time = self._jenkins_api_call('/computer/api/json', tree)
+        if result is None:
+            return []
 
-        initial_time = time.time()
-        response = requests.get(url, params=params, auth=self._auth)
-        latency = time.time() - initial_time
-        self._prom_metrics['jenkins_latency'].add_metric(['/computer/api/json'], latency)
-        self._prom_metrics['jenkins_response'].add_metric(
-            ['/computer/api/json'], response.status_code)
-        if response.status_code != requests.codes.ok:
-            self._prom_metrics['jenkins_fetch_ok'].add_metric(['/computer/api/json'], 0)
-            print url, response.status_code
-            return[]
-        self._prom_metrics['jenkins_fetch_ok'].add_metric(['/computer/api/json'], 1)
-        result = response.json()
-
+        running_builds = []
         for node in result.get('computer', []):
             self._prom_metrics['online'].add_metric(
                 [node['displayName']], not node.get('offline', True))
@@ -184,6 +168,13 @@ class JenkinsCollector(object):
             if clock_diff is not None:
                 self._prom_metrics['skew'].add_metric(
                     [node['displayName']], clock_diff / 1000.0)
+
+            for executor in node['executors']:
+                if executor['currentExecutable'] is not None:
+                    running_builds.append(executor['currentExecutable'])
+
+        self._add_running_build_data_to_prometheus(
+            running_builds, config_mapping, initial_time)
 
     def _setup_empty_prometheus_metrics(self):
         # The metrics we want to export.
@@ -271,12 +262,75 @@ class JenkinsCollector(object):
             "Job URls that weren't found in the configuration mapping.",
             labels=['url'],
         )
+        self._prom_metrics['executing_builds'] = GaugeMetricFamily(
+            'jenkins_executing_builds',
+            'Number of currently executing builds.',
+            labels=['jenkins_job', 'jenkins_job_config'],
+        )
+        self._prom_metrics['max_currently_running_duration'] = GaugeMetricFamily(
+            'jenkins_max_currently_running_duration_seconds',
+            'How long the longest-running still-executing build has taken.',
+            labels=['jenkins_job', 'jenkins_job_config'],
+        )
+        self._prom_metrics['max_currently_running_build_number'] = GaugeMetricFamily(
+            'jenkins_max_currently_running_build_number',
+            'Build number of the longest-running still-executing build.',
+            labels=['jenkins_job', 'jenkins_job_config'],
+        )
 
     def _get_metrics(self, name, job):
         for status in self.statuses:
             if status in job.keys():
                 status_data = job[status] or {}
                 self._add_data_to_prometheus_structure(status, status_data, job, name)
+
+    def _add_running_build_data_to_prometheus(self, builds, config_mapping, request_time):
+        """Calculate metrics on running builds and report those to Prometheus.
+
+        Because we calculate running duration off a timestamp, we need request time (the
+        time the API call was made) to subtract from.
+        """
+        executing_builds_breakdown = collections.defaultdict(
+            lambda: collections.defaultdict(list))
+        for build in builds:
+            build_url = build.get('url', '')
+            job_name, job_config = map_url_to_job_config(build_url, config_mapping)
+
+            if job_name is None or job_config is None:
+                # We found a job or configuration that wasn't in the mapping. This can
+                # happen if the job was added after we got the mapping in _request_data().
+                # The next scan should have the job in the mapping.
+                self._prom_metrics['dropped_job_urls'].add_metric([build_url], 1)
+                continue
+
+            executing_builds_breakdown[job_name][job_config].append(build)
+
+        # Report over all job configs here, so things return to zero when they're done.
+        for job_name, job_config in config_mapping.itervalues():
+            builds = executing_builds_breakdown[job_name][job_config]
+
+            self._prom_metrics['executing_builds'].add_metric(
+                [job_name, job_config], len(builds))
+
+            if builds:
+                # It looks like we can't get the current duration directly from this
+                # endpoint, so we subtract off the 'current' time here. This leaves in
+                # network jitter and any node/exporter clock skew, but prevents making a
+                # second trip querying all the jobs.
+                build_durations = [
+                    (b['number'], request_time - (b['timestamp'] / 1000.0))
+                    for b in builds
+                ]
+                max_build_num, max_build_dur = max(build_durations, key=lambda x: x[1])
+                max_build_dur = max(max_build_dur, 0)  # Clamp negative numbers to zero.
+            else:
+                max_build_num = -1
+                max_build_dur = 0
+
+            self._prom_metrics['max_currently_running_duration'].add_metric(
+                [job_name, job_config], max_build_dur)
+            self._prom_metrics['max_currently_running_build_number'].add_metric(
+                [job_name, job_config], max_build_num)
 
     def _add_data_to_prometheus_structure(self, status, status_data, job, name):
         # If there's a null result, we want to pass.
