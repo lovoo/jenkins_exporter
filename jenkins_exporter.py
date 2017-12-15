@@ -116,34 +116,34 @@ class JenkinsCollector(object):
 
         for task in result['items']:
             task_url = task.get('task', {}).get('url', '')
-            job_name, config_name = (None, None)
+            job_name, job_config = (None, None)
             # Look for the longest matching URL in the config mapping.
             match_length = 0
             for url, match in config_mapping.iteritems():
                 if task_url.startswith(url) and len(url) > match_length:
-                    job_name, config_name = match
+                    job_name, job_config = match
                     match_length = len(url)
 
-            if job_name is None or config_name is None:
+            if job_name is None or job_config is None:
                 # We found a job or configuration that wasn't in the mapping. This can
                 # happen if the job was added after we got the mapping in _request_data().
                 # The next scan should have the job in the mapping.
                 self._prom_metrics['dropped_job_urls'].add_metric([task_url], 1)
                 continue
 
-            old_count = task_count[job_name][config_name]
-            task_count[job_name][config_name] = old_count + 1
+            old_count = task_count[job_name][job_config]
+            task_count[job_name][job_config] = old_count + 1
 
             queuing_time = initial_time - (task['inQueueSince'] / 1000.0)
-            old_max = max_queue_time[job_name][config_name]
-            max_queue_time[job_name][config_name] = max(old_max, queuing_time)
+            old_max = max_queue_time[job_name][job_config]
+            max_queue_time[job_name][job_config] = max(old_max, queuing_time)
 
         # Note: this is itervalues(), not iteritems().
-        for job_name, config_name in config_mapping.itervalues():
+        for job_name, job_config in config_mapping.itervalues():
             self._prom_metrics['queue'].add_metric(
-                [job_name, config_name], max_queue_time[job_name][config_name])
+                [job_name, job_config], max_queue_time[job_name][job_config])
             self._prom_metrics['queue_count'].add_metric(
-                [job_name, config_name], task_count[job_name][config_name])
+                [job_name, job_config], task_count[job_name][job_config])
 
     def _request_nodes(self):
         url = '{0}/computer/api/json'.format(self._target)
