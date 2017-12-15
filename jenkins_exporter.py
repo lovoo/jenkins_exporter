@@ -54,13 +54,9 @@ class JenkinsCollector(object):
         for metric in self._prom_metrics.itervalues():
             yield metric
 
-    def _request_data(self):
-        # Request exactly the information we need from Jenkins
-        url = '{0}/api/json'.format(self._target)
-        jobs = "[number,timestamp,duration,actions[queuingDurationMillis,totalDurationMillis," \
-               "skipCount,failCount,totalCount,passCount]]"
-        tree = 'jobs[name,url,activeConfigurations[name,url],{0}]'.format(
-            ','.join([s + jobs for s in self.statuses]))
+    def _jenkins_api_call(self, url_fragment, tree):
+        """Make a Jenkins API call and return the parsed result."""
+        url = '%s%s' % (self._target, url_fragment)
         params = {
             'tree': tree,
         }
@@ -68,15 +64,29 @@ class JenkinsCollector(object):
         initial_time = time.time()
         response = requests.get(url, params=params, auth=self._auth)
         latency = time.time() - initial_time
-        self._prom_metrics['jenkins_latency'].add_metric(['/api/json'], latency)
+        self._prom_metrics['jenkins_latency'].add_metric([url_fragment], latency)
         self._prom_metrics['jenkins_response'].add_metric(
-            ['/api/json'], response.status_code)
+            [url_fragment], response.status_code)
         if response.status_code != requests.codes.ok:
-            self._prom_metrics['jenkins_fetch_ok'].add_metric(['/api/json'], 0)
+            self._prom_metrics['jenkins_fetch_ok'].add_metric([url_fragment], 0)
             print url, response.status_code
-            return[]
-        self._prom_metrics['jenkins_fetch_ok'].add_metric(['/api/json'], 1)
-        result = response.json()
+            return None
+        self._prom_metrics['jenkins_fetch_ok'].add_metric([url_fragment], 1)
+
+        # We return initial_time here to provide a reference for calculations based on any
+        # timestamps found in the response.
+        return response.json(), initial_time
+
+    def _request_data(self):
+        # Request exactly the information we need from Jenkins
+        jobs = "[number,timestamp,duration,actions[queuingDurationMillis,totalDurationMillis," \
+               "skipCount,failCount,totalCount,passCount]]"
+        tree = 'jobs[name,url,activeConfigurations[name,url],{0}]'.format(
+            ','.join([s + jobs for s in self.statuses]))
+
+        result, _ = self._jenkins_api_call('/api/json', tree)
+        if result is None:
+            return [], {}
         if DEBUG:
             pprint(result)
 
@@ -91,24 +101,10 @@ class JenkinsCollector(object):
         return jobs, config_mapping
 
     def _request_queue(self, jobs, config_mapping):
-        url = '{0}/queue/api/json'.format(self._target)
         tree = 'items[inQueueSince,task[url]]'
-        params = {
-            'tree': tree,
-        }
-
-        initial_time = time.time()
-        response = requests.get(url, params=params, auth=self._auth)
-        latency = time.time() - initial_time
-        self._prom_metrics['jenkins_latency'].add_metric(['/queue/api/json'], latency)
-        self._prom_metrics['jenkins_response'].add_metric(
-            ['/queue/api/json'], response.status_code)
-        if response.status_code != requests.codes.ok:
-            self._prom_metrics['jenkins_fetch_ok'].add_metric(['/queue/api/json'], 0)
-            print url, response.status_code
-            return[]
-        self._prom_metrics['jenkins_fetch_ok'].add_metric(['/queue/api/json'], 1)
-        result = response.json()
+        result, initial_time = self._jenkins_api_call('/queue/api/json', tree)
+        if result is None:
+            return []
 
         max_queue_time = collections.defaultdict(lambda: collections.defaultdict(
             lambda: 0.0))
@@ -146,24 +142,10 @@ class JenkinsCollector(object):
                 [job_name, job_config], task_count[job_name][job_config])
 
     def _request_nodes(self):
-        url = '{0}/computer/api/json'.format(self._target)
         tree = 'computer[displayName,offline,temporarilyOffline,idle,monitorData[*]]'
-        params = {
-            'tree': tree,
-        }
-
-        initial_time = time.time()
-        response = requests.get(url, params=params, auth=self._auth)
-        latency = time.time() - initial_time
-        self._prom_metrics['jenkins_latency'].add_metric(['/computer/api/json'], latency)
-        self._prom_metrics['jenkins_response'].add_metric(
-            ['/computer/api/json'], response.status_code)
-        if response.status_code != requests.codes.ok:
-            self._prom_metrics['jenkins_fetch_ok'].add_metric(['/computer/api/json'], 0)
-            print url, response.status_code
-            return[]
-        self._prom_metrics['jenkins_fetch_ok'].add_metric(['/computer/api/json'], 1)
-        result = response.json()
+        result, _ = self._jenkins_api_call('/computer/api/json', tree)
+        if result is None:
+            return []
 
         for node in result.get('computer', []):
             self._prom_metrics['online'].add_metric(
