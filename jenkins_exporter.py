@@ -65,28 +65,23 @@ class JenkinsCollector(object):
             'tree': tree,
         }
 
-        def parsejobs(myurl):
-            initial_time = time.time()
-            response = requests.get(myurl, params=params, auth=self._auth)
-            latency = time.time() - initial_time
-            self._prom_metrics['jenkins_latency'].add_metric(['/api/json'], latency)
-            self._prom_metrics['jenkins_response'].add_metric(
-                ['/api/json'], response.status_code)
-            if response.status_code != requests.codes.ok:
-                self._prom_metrics['jenkins_fetch_ok'].add_metric(['/api/json'], 0)
-                print url, response.status_code
-                return[]
-            self._prom_metrics['jenkins_fetch_ok'].add_metric(['/api/json'], 1)
-            result = response.json()
-            if DEBUG:
-                pprint(result)
+        initial_time = time.time()
+        response = requests.get(url, params=params, auth=self._auth)
+        latency = time.time() - initial_time
+        self._prom_metrics['jenkins_latency'].add_metric(['/api/json'], latency)
+        self._prom_metrics['jenkins_response'].add_metric(
+            ['/api/json'], response.status_code)
+        if response.status_code != requests.codes.ok:
+            self._prom_metrics['jenkins_fetch_ok'].add_metric(['/api/json'], 0)
+            print url, response.status_code
+            return[]
+        self._prom_metrics['jenkins_fetch_ok'].add_metric(['/api/json'], 1)
+        result = response.json()
+        if DEBUG:
+            pprint(result)
 
-            jobs = []
-            for job in result['jobs']:
-                jobs.append(job)
-            return jobs
+        jobs = result['jobs']
 
-        jobs = parsejobs(url)
         config_mapping = {}
         for job in jobs:
             for config in job.get('activeConfigurations', []):
