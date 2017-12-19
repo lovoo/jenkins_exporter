@@ -56,7 +56,7 @@ class JenkinsCollector(object):
             # params = tree: jobs[name,lastBuild[number,timestamp,duration,actions[queuingDurationMillis...
             response = requests.get(myurl, params=params, auth=(self._user, self._password))
             if response.status_code != requests.codes.ok:
-                return[]
+                raise Exception("Call to url %s failed with status: %s" % (myurl, response.status_code))
             result = response.json()
             if DEBUG:
                 pprint(result)
