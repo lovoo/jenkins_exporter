@@ -8,11 +8,12 @@ from pprint import pprint
 
 import os
 from sys import exit
-from prometheus_client import start_http_server
+from prometheus_client import start_http_server, Summary
 from prometheus_client.core import GaugeMetricFamily, REGISTRY
 
 DEBUG = int(os.environ.get('DEBUG', '0'))
 
+COLLECTION_TIME = Summary('jenkins_collector_collect_seconds', 'Time spent to collect metrics from Jenkins')
 
 class JenkinsCollector(object):
     # The build statuses we want to export about.
@@ -26,6 +27,8 @@ class JenkinsCollector(object):
         self._password = password
 
     def collect(self):
+        start = time.time()
+
         # Request data from Jenkins
         jobs = self._request_data()
 
@@ -41,6 +44,9 @@ class JenkinsCollector(object):
         for status in self.statuses:
             for metric in self._prometheus_metrics[status].values():
                 yield metric
+
+        duration = time.time() - start
+        COLLECTION_TIME.observe(duration)
 
     def _request_data(self):
         # Request exactly the information we need from Jenkins
