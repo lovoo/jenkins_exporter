@@ -61,7 +61,12 @@ class JenkinsCollector(object):
 
         def parsejobs(myurl):
             # params = tree: jobs[name,lastBuild[number,timestamp,duration,actions[queuingDurationMillis...
-            response = requests.get(myurl, params=params, auth=(self._user, self._password), verify=(not self._insecure))
+            if self._user and self._password:
+                response = requests.get(myurl, params=params, auth=(self._user, self._password), verify=(not self._insecure))
+            else:
+                response = requests.get(myurl, params=params, verify=(not self._insecure))
+            if DEBUG:
+                pprint(response.text)
             if response.status_code != requests.codes.ok:
                 raise Exception("Call to url %s failed with status: %s" % (myurl, response.status_code))
             result = response.json()
