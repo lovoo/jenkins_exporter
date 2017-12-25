@@ -8,11 +8,12 @@ from pprint import pprint
 
 import os
 from sys import exit
-from prometheus_client import start_http_server
+from prometheus_client import start_http_server, Summary
 from prometheus_client.core import GaugeMetricFamily, REGISTRY
 
 DEBUG = int(os.environ.get('DEBUG', '0'))
 
+COLLECTION_TIME = Summary('jenkins_collector_collect_seconds', 'Time spent to collect metrics from Jenkins')
 
 class JenkinsCollector(object):
     # The build statuses we want to export about.
@@ -26,6 +27,8 @@ class JenkinsCollector(object):
         self._password = password
 
     def collect(self):
+        start = time.time()
+
         # Request data from Jenkins
         jobs = self._request_data()
 
@@ -34,13 +37,16 @@ class JenkinsCollector(object):
         for job in jobs:
             name = job['fullName']
             if DEBUG:
-                print "Found Job: %s" % name
+                print("Found Job: {}".format(name))
                 pprint(job)
             self._get_metrics(name, job)
 
         for status in self.statuses:
             for metric in self._prometheus_metrics[status].values():
                 yield metric
+
+        duration = time.time() - start
+        COLLECTION_TIME.observe(duration)
 
     def _request_data(self):
         # Request exactly the information we need from Jenkins
@@ -56,7 +62,7 @@ class JenkinsCollector(object):
             # params = tree: jobs[name,lastBuild[number,timestamp,duration,actions[queuingDurationMillis...
             response = requests.get(myurl, params=params, auth=(self._user, self._password))
             if response.status_code != requests.codes.ok:
-                return[]
+                raise Exception("Call to url %s failed with status: %s" % (myurl, response.status_code))
             result = response.json()
             if DEBUG:
                 pprint(result)
@@ -64,6 +70,7 @@ class JenkinsCollector(object):
             jobs = []
             for job in result['jobs']:
                 if job['_class'] == 'com.cloudbees.hudson.plugins.folder.Folder' or \
+                   job['_class'] == 'jenkins.branch.OrganizationFolder' or \
                    job['_class'] == 'org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject':
                     jobs += parsejobs(job['url'] + '/api/json')
                 else:
@@ -181,7 +188,7 @@ def main():
         port = int(args.port)
         REGISTRY.register(JenkinsCollector(args.jenkins, args.user, args.password))
         start_http_server(port)
-        print "Polling %s. Serving at port: %s" % (args.jenkins, port)
+        print("Polling {}. Serving at port: {}".format(args.jenkins, port))
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
