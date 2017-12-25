@@ -34,7 +34,7 @@ class JenkinsCollector(object):
         for job in jobs:
             name = job['name']
             if DEBUG:
-                print "Found Job: %s" % name
+                print("Found Job: {}".format(name))
                 pprint(job)
             self._get_metrics(name, job)
 
@@ -181,7 +181,7 @@ def main():
         port = int(args.port)
         REGISTRY.register(JenkinsCollector(args.jenkins, args.user, args.password))
         start_http_server(port)
-        print "Polling %s. Serving at port: %s" % (args.jenkins, port)
+        print("Polling {}. Serving at port: {}".format(args.jenkins, port))
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
