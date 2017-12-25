@@ -21,10 +21,11 @@ class JenkinsCollector(object):
                 "lastStableBuild", "lastSuccessfulBuild", "lastUnstableBuild",
                 "lastUnsuccessfulBuild"]
 
-    def __init__(self, target, user, password):
+    def __init__(self, target, user, password, insecure):
         self._target = target.rstrip("/")
         self._user = user
         self._password = password
+        self._insecure = insecure
 
     def collect(self):
         start = time.time()
@@ -60,7 +61,7 @@ class JenkinsCollector(object):
 
         def parsejobs(myurl):
             # params = tree: jobs[name,lastBuild[number,timestamp,duration,actions[queuingDurationMillis...
-            response = requests.get(myurl, params=params, auth=(self._user, self._password))
+            response = requests.get(myurl, params=params, auth=(self._user, self._password), verify=(not self._insecure))
             if response.status_code != requests.codes.ok:
                 raise Exception("Call to url %s failed with status: %s" % (myurl, response.status_code))
             result = response.json()
@@ -179,6 +180,14 @@ def parse_args():
         help='Listen to this port',
         default=int(os.environ.get('VIRTUAL_PORT', '9118'))
     )
+    parser.add_argument(
+        '-k', '--insecure',
+        dest='insecure',
+        required=False,
+        action='store_true',
+        help='Allow connection to insecure Jenkins API',
+        default=False
+    )
     return parser.parse_args()
 
 
@@ -186,7 +195,7 @@ def main():
     try:
         args = parse_args()
         port = int(args.port)
-        REGISTRY.register(JenkinsCollector(args.jenkins, args.user, args.password))
+        REGISTRY.register(JenkinsCollector(args.jenkins, args.user, args.password, args.insecure))
         start_http_server(port)
         print("Polling {}. Serving at port: {}".format(args.jenkins, port))
         while True:

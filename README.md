@@ -9,7 +9,7 @@ For more information see (http://www.robustperception.io/writing-a-jenkins-expor
 
 ## Usage
 
-    jenkins_exporter.py [-h] [-j jenkins] [--user user]
+    jenkins_exporter.py [-h] [-j jenkins] [--user user] [-k]
                         [--password password] [-p port]
 
     optional arguments:
@@ -19,6 +19,7 @@ For more information see (http://www.robustperception.io/writing-a-jenkins-expor
       --user user           jenkins api user
       --password password   jenkins api password
       -p port, --port port  Listen to this port
+      -k, --insecure        Allow connection to insecure Jenkins API
 
 #### Example
 
