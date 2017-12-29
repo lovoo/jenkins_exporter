@@ -5,8 +5,10 @@ python:
     - "3.6"
 
 # command to install dependencies
-install: "pip install -r requirements.txt"
+install: "pip install -r requirements.txt flake8"
 # command to run tests
-script: python test.py
-# use new travis-ci container-based infrastructure 
+script:
+    - flake8 jenkins_exporter.py --max-line-length=140
+    - python test.py
+# use new travis-ci container-based infrastructure
 sudo: false
