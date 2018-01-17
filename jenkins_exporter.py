@@ -1,11 +1,11 @@
 #!/usr/bin/python
 
+from pprint import pprint
+import argparse
 import collections
 import re
-import time
 import requests
-import argparse
-from pprint import pprint
+import time
 
 import os
 from sys import exit
