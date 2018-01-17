@@ -65,12 +65,9 @@ class JenkinsCollector(object):
         for metric in self._prom_metrics.itervalues():
             yield metric
 
-    def _jenkins_api_call(self, url_fragment, tree):
-        """Make a Jenkins API call and return the parsed result."""
+    def _jenkins_call(self, url_fragment, params=None):
+        """Make a generic Jenkins web call."""
         url = '%s%s' % (self._target, url_fragment)
-        params = {
-            'tree': tree,
-        }
 
         initial_time = time.time()
         response = requests.get(url, params=params, auth=self._auth)
@@ -81,11 +78,23 @@ class JenkinsCollector(object):
         if response.status_code != requests.codes.ok:
             self._prom_metrics['jenkins_fetch_ok'].add_metric([url_fragment], 0)
             print url, response.status_code
-            return None
+            return None, initial_time
         self._prom_metrics['jenkins_fetch_ok'].add_metric([url_fragment], 1)
 
         # We return initial_time here to provide a reference for calculations based on any
         # timestamps found in the response.
+        return response, initial_time
+
+    def _jenkins_api_call(self, url_fragment, tree):
+        """Make a Jenkins API call and return the parsed result."""
+        params = {
+            'tree': tree,
+        }
+
+        response, initial_time = self._jenkins_call(url_fragment, params)
+        if response is None:
+            return None, initial_time
+
         return response.json(), initial_time
 
     def _request_data(self):
