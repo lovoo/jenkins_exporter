@@ -8,6 +8,7 @@ import collections
 import re
 import requests
 import time
+import urlparse
 
 import os
 from sys import exit
@@ -220,8 +221,8 @@ class JenkinsCollector(object):
 
     def _request_nodes(self, config_mapping):
         tree = ('computer[displayName,offline,temporarilyOffline,idle,monitorData[*],'
-                'executors[currentExecutable[url,number,timestamp]]]')
-        result, initial_time = self._jenkins_api_call('/computer/api/json', tree)
+                'executors[currentExecutable[url,number]]]')
+        result, _ = self._jenkins_api_call('/computer/api/json', tree)
         if result is None:
             return []
 
@@ -245,8 +246,7 @@ class JenkinsCollector(object):
                 if executor['currentExecutable'] is not None:
                     running_builds.append(executor['currentExecutable'])
 
-        self._add_running_build_data_to_prometheus(
-            running_builds, config_mapping, initial_time)
+        self._add_running_build_data_to_prometheus(running_builds, config_mapping)
 
     def _setup_empty_prometheus_metrics(self):
         # The metrics we want to export.
@@ -356,7 +356,7 @@ class JenkinsCollector(object):
                 status_data = job[status] or {}
                 self._add_data_to_prometheus_structure(status, status_data, job, name)
 
-    def _add_running_build_data_to_prometheus(self, builds, config_mapping, request_time):
+    def _add_running_build_data_to_prometheus(self, builds, config_mapping):
         """Calculate metrics on running builds and report those to Prometheus.
 
         Because we calculate running duration off a timestamp, we need request time (the
@@ -384,17 +384,29 @@ class JenkinsCollector(object):
             self._prom_metrics['executing_builds'].add_metric(
                 [job_name, job_config], len(builds))
 
-            if builds:
-                # It looks like we can't get the current duration directly from this
-                # endpoint, so we subtract off the 'current' time here. This leaves in
-                # network jitter and any node/exporter clock skew, but prevents making a
-                # second trip querying all the jobs.
-                build_durations = [
-                    (b['number'], request_time - (b['timestamp'] / 1000.0))
-                    for b in builds
-                ]
-                max_build_num, max_build_dur = max(build_durations, key=lambda x: x[1])
-                max_build_dur = max(max_build_dur, 0)  # Clamp negative numbers to zero.
+            def get_timestamp_from_build_url(build_url):
+                """Parse the build's status page for current duration."""
+                # Remove the host, scheme and port off the build_url.
+                fragments = urlparse.urlsplit(build_url)
+                build_url_part = urlparse.urlunsplit(
+                    (0, 0, fragments[2], fragments[3], fragments[4]))
+                data, _ = self._jenkins_call(build_url_part)
+                if data is None:
+                    return None
+                parser = JenkinsElapsedHTMLParser()
+                parser.feed(data.text)
+                return parser.elapsed_time
+
+            build_numbers_and_durations = [
+                (b['number'], get_timestamp_from_build_url(b['url']))
+                for b in builds
+            ]
+            # Remove any durations that came out None.
+            build_numbers_and_durations = [b for b in build_numbers_and_durations if b[1]]
+
+            if build_numbers_and_durations:
+                max_build_num, max_build_dur = max(
+                    build_numbers_and_durations, key=lambda x: x[1])
             else:
                 max_build_num = -1
                 max_build_dur = 0
