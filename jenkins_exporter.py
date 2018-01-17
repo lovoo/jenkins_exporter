@@ -1,5 +1,7 @@
 #!/usr/bin/python
 
+from HTMLParser import HTMLParser
+from itertools import izip
 from pprint import pprint
 import argparse
 import collections
@@ -28,6 +30,67 @@ def map_url_to_job_config(url, config_mapping):
             job_name, job_config = match
             match_length = len(candidate_url)
     return job_name, job_config
+
+
+def convert_timestring_to_secs(timestring):
+    """Convert a Jenkins-style duration string into floating point seconds."""
+    tokens = timestring.split(' ')
+
+    if (len(tokens) % 2) != 0:
+        # We don't have pairs, so something went wrong in the parsing.
+        return None
+    pairs = izip(tokens[0::2], tokens[1::2])
+
+    # These are defined in core/src/main/resources/hudson/Messages.properties and
+    # core/src/main/java/hudson/Util.java.
+    seconds_mapping = {
+        'ms': 0.001,
+        'sec': 1.0,
+        'min': 60.0,
+        'hr': 3600.0,
+        'day': 24 * 3600.0,
+        'days': 24 * 3600.0,
+        'mo': 30 * 24 * 3600.0,
+        'yr': 365 * 24 * 3600.0,
+    }
+
+    seconds = 0.0
+    for amount, unit in pairs:
+        if unit not in seconds_mapping:
+            return None
+
+        try:
+            int_amount = int(amount)
+        except ValueError:
+            return None
+
+        seconds += int_amount * seconds_mapping[unit]
+
+    return seconds
+
+
+class JenkinsElapsedHTMLParser(HTMLParser):
+    """Parse a Jenkins build page and extract the current build duration."""
+    current_tag = None
+    elapsed_time = None
+
+    def handle_starttag(self, tag, attrs):
+        """Record when a tag is opened."""
+        self.current_tag = tag
+
+    def handle_data(self, data):
+        """Process data if it's inside a <div>."""
+        if self.elapsed_time is not None or self.current_tag != 'div':
+            return
+
+        elapsed_string = 'Build has been executing for '
+        if elapsed_string in data:
+            timestring = data[len(elapsed_string):].split('\n')[0]
+            self.elapsed_time = convert_timestring_to_secs(timestring)
+
+    def error(self, message):
+        """Satisfes pylint as error is NotImplemented in HTMLParser."""
+        raise message
 
 
 class JenkinsCollector(object):
