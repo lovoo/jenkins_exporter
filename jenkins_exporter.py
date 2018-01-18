@@ -1,11 +1,14 @@
 #!/usr/bin/python
 
+from HTMLParser import HTMLParser
+from itertools import izip
+from pprint import pprint
+import argparse
 import collections
 import re
-import time
 import requests
-import argparse
-from pprint import pprint
+import time
+import urlparse
 
 import os
 from sys import exit
@@ -28,6 +31,67 @@ def map_url_to_job_config(url, config_mapping):
             job_name, job_config = match
             match_length = len(candidate_url)
     return job_name, job_config
+
+
+def convert_timestring_to_secs(timestring):
+    """Convert a Jenkins-style duration string into floating point seconds."""
+    tokens = timestring.split(' ')
+
+    if (len(tokens) % 2) != 0:
+        # We don't have pairs, so something went wrong in the parsing.
+        return None
+    pairs = izip(tokens[0::2], tokens[1::2])
+
+    # These are defined in core/src/main/resources/hudson/Messages.properties and
+    # core/src/main/java/hudson/Util.java.
+    seconds_mapping = {
+        'ms': 0.001,
+        'sec': 1.0,
+        'min': 60.0,
+        'hr': 3600.0,
+        'day': 24 * 3600.0,
+        'days': 24 * 3600.0,
+        'mo': 30 * 24 * 3600.0,
+        'yr': 365 * 24 * 3600.0,
+    }
+
+    seconds = 0.0
+    for amount, unit in pairs:
+        if unit not in seconds_mapping:
+            return None
+
+        try:
+            int_amount = int(amount)
+        except ValueError:
+            return None
+
+        seconds += int_amount * seconds_mapping[unit]
+
+    return seconds
+
+
+class JenkinsElapsedHTMLParser(HTMLParser):
+    """Parse a Jenkins build page and extract the current build duration."""
+    current_tag = None
+    elapsed_time = None
+
+    def handle_starttag(self, tag, attrs):
+        """Record when a tag is opened."""
+        self.current_tag = tag
+
+    def handle_data(self, data):
+        """Process data if it's inside a <div>."""
+        if self.elapsed_time is not None or self.current_tag != 'div':
+            return
+
+        elapsed_string = 'Build has been executing for '
+        if elapsed_string in data:
+            timestring = data[len(elapsed_string):].split('\n')[0]
+            self.elapsed_time = convert_timestring_to_secs(timestring)
+
+    def error(self, message):
+        """Satisfes pylint as error is NotImplemented in HTMLParser."""
+        raise message
 
 
 class JenkinsCollector(object):
@@ -65,12 +129,9 @@ class JenkinsCollector(object):
         for metric in self._prom_metrics.itervalues():
             yield metric
 
-    def _jenkins_api_call(self, url_fragment, tree):
-        """Make a Jenkins API call and return the parsed result."""
+    def _jenkins_call(self, url_fragment, params=None):
+        """Make a generic Jenkins web call."""
         url = '%s%s' % (self._target, url_fragment)
-        params = {
-            'tree': tree,
-        }
 
         initial_time = time.time()
         response = requests.get(url, params=params, auth=self._auth)
@@ -81,11 +142,23 @@ class JenkinsCollector(object):
         if response.status_code != requests.codes.ok:
             self._prom_metrics['jenkins_fetch_ok'].add_metric([url_fragment], 0)
             print url, response.status_code
-            return None
+            return None, initial_time
         self._prom_metrics['jenkins_fetch_ok'].add_metric([url_fragment], 1)
 
         # We return initial_time here to provide a reference for calculations based on any
         # timestamps found in the response.
+        return response, initial_time
+
+    def _jenkins_api_call(self, url_fragment, tree):
+        """Make a Jenkins API call and return the parsed result."""
+        params = {
+            'tree': tree,
+        }
+
+        response, initial_time = self._jenkins_call(url_fragment, params)
+        if response is None:
+            return None, initial_time
+
         return response.json(), initial_time
 
     def _request_data(self):
@@ -148,8 +221,8 @@ class JenkinsCollector(object):
 
     def _request_nodes(self, config_mapping):
         tree = ('computer[displayName,offline,temporarilyOffline,idle,monitorData[*],'
-                'executors[currentExecutable[url,number,timestamp]]]')
-        result, initial_time = self._jenkins_api_call('/computer/api/json', tree)
+                'executors[currentExecutable[url,number]]]')
+        result, _ = self._jenkins_api_call('/computer/api/json', tree)
         if result is None:
             return []
 
@@ -173,8 +246,7 @@ class JenkinsCollector(object):
                 if executor['currentExecutable'] is not None:
                     running_builds.append(executor['currentExecutable'])
 
-        self._add_running_build_data_to_prometheus(
-            running_builds, config_mapping, initial_time)
+        self._add_running_build_data_to_prometheus(running_builds, config_mapping)
 
     def _setup_empty_prometheus_metrics(self):
         # The metrics we want to export.
@@ -284,7 +356,7 @@ class JenkinsCollector(object):
                 status_data = job[status] or {}
                 self._add_data_to_prometheus_structure(status, status_data, job, name)
 
-    def _add_running_build_data_to_prometheus(self, builds, config_mapping, request_time):
+    def _add_running_build_data_to_prometheus(self, builds, config_mapping):
         """Calculate metrics on running builds and report those to Prometheus.
 
         Because we calculate running duration off a timestamp, we need request time (the
@@ -312,17 +384,29 @@ class JenkinsCollector(object):
             self._prom_metrics['executing_builds'].add_metric(
                 [job_name, job_config], len(builds))
 
-            if builds:
-                # It looks like we can't get the current duration directly from this
-                # endpoint, so we subtract off the 'current' time here. This leaves in
-                # network jitter and any node/exporter clock skew, but prevents making a
-                # second trip querying all the jobs.
-                build_durations = [
-                    (b['number'], request_time - (b['timestamp'] / 1000.0))
-                    for b in builds
-                ]
-                max_build_num, max_build_dur = max(build_durations, key=lambda x: x[1])
-                max_build_dur = max(max_build_dur, 0)  # Clamp negative numbers to zero.
+            def get_timestamp_from_build_url(build_url):
+                """Parse the build's status page for current duration."""
+                # Remove the host, scheme and port off the build_url.
+                fragments = urlparse.urlsplit(build_url)
+                build_url_part = urlparse.urlunsplit(
+                    (0, 0, fragments[2], fragments[3], fragments[4]))
+                data, _ = self._jenkins_call(build_url_part)
+                if data is None:
+                    return None
+                parser = JenkinsElapsedHTMLParser()
+                parser.feed(data.text)
+                return parser.elapsed_time
+
+            build_numbers_and_durations = [
+                (b['number'], get_timestamp_from_build_url(b['url']))
+                for b in builds
+            ]
+            # Remove any durations that came out None.
+            build_numbers_and_durations = [b for b in build_numbers_and_durations if b[1]]
+
+            if build_numbers_and_durations:
+                max_build_num, max_build_dur = max(
+                    build_numbers_and_durations, key=lambda x: x[1])
             else:
                 max_build_num = -1
                 max_build_dur = 0
