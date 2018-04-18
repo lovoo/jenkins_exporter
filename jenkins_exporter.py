@@ -100,11 +100,12 @@ class JenkinsCollector(object):
                 "lastStableBuild", "lastSuccessfulBuild", "lastUnstableBuild",
                 "lastUnsuccessfulBuild"]
 
-    def __init__(self, target, user, password):
+    def __init__(self, target, user, password, timeout):
         self._target = target.rstrip("/")
         self._auth = None
         if user and password:
             self._auth = (user, password)
+        self.timeout = timeout
 
     def collect(self):
         self._setup_empty_prometheus_metrics()
@@ -134,7 +135,7 @@ class JenkinsCollector(object):
         url = '%s%s' % (self._target, url_fragment)
 
         initial_time = time.time()
-        response = requests.get(url, params=params, auth=self._auth)
+        response = requests.get(url, params=params, auth=self._auth, timeout=self.timeout)
         latency = time.time() - initial_time
         self._prom_metrics['jenkins_latency'].add_metric([url_fragment], latency)
         self._prom_metrics['jenkins_response'].add_metric(
@@ -474,6 +475,13 @@ def parse_args():
         help='Listen to this port',
         default=int(os.environ.get('VIRTUAL_PORT', '9118'))
     )
+    parser.add_argument(
+        '--timeout-secs',
+        metavar='timeout',
+        type=int,
+        help='Time out Jenkins API requests after this many seconds',
+        default=5,
+    )
     return parser.parse_args()
 
 
@@ -481,7 +489,12 @@ def main():
     try:
         args = parse_args()
         port = int(args.port)
-        REGISTRY.register(JenkinsCollector(args.jenkins, args.user, args.password))
+        REGISTRY.register(JenkinsCollector(
+            args.jenkins,
+            args.user,
+            args.password,
+            args.timeout,
+        ))
         start_http_server(port)
         print "Polling %s. Serving at port: %s" % (args.jenkins, port)
         while True:
