@@ -493,7 +493,7 @@ def main():
             args.jenkins,
             args.user,
             args.password,
-            args.timeout,
+            args.timeout_secs,
         ))
         start_http_server(port)
         print "Polling %s. Serving at port: %s" % (args.jenkins, port)
