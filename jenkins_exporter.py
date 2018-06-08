@@ -1,5 +1,6 @@
 #!/usr/bin/python
 
+
 from HTMLParser import HTMLParser
 from itertools import izip
 from pprint import pprint
