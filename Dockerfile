@@ -10,5 +10,7 @@ COPY jenkins_exporter.py /usr/src/app
 
 EXPOSE 9118
 ENV JENKINS_SERVER=http://jenkins:8080 VIRTUAL_PORT=9118 DEBUG=0
+ENV JENKINS_USER=admin
+ENV JENKINS_PASSWORD=admin
 
 ENTRYPOINT [ "python", "-u", "./jenkins_exporter.py" ]

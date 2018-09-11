@@ -23,8 +23,7 @@ For more information see (http://www.robustperception.io/writing-a-jenkins-expor
 
 #### Example
 
-    docker run -d -p 9118:9118 lovoo/jenkins_exporter:latest -j http://jenkins:8080 -p 9118
-
+    docker run -d -p 9118:9118 lovoo/jenkins_exporter:latest -e JENKINS_SERVER=http://jenkins:8080 -e JENKINS_USER=my_user -e JENKINS_PASSWORD=abc  -p 9118
 
 ## Installation
 
