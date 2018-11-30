@@ -52,14 +52,26 @@ class JenkinsCollector(object):
     def _request_data(self):
         # Request exactly the information we need from Jenkins
         url = '{0}/api/json'.format(self._target)
-        jobs = "[fullName,number,timestamp,duration,actions[queuingDurationMillis,totalDurationMillis," \
-               "skipCount,failCount,totalCount,passCount]]"
-        tree = 'jobs[fullName,url,{0}]'.format(','.join([s + jobs for s in self.statuses]))
+        jobs_param = "fullName,number,timestamp,duration,actions[queuingDurationMillis,totalDurationMillis," \
+               "skipCount,failCount,totalCount,passCount]"
+        tree = 'jobs[fullName,url,{0}]'.format(','.join(["{0}[{1}]".format(s, jobs_param) for s in self.statuses]))
         params = {
             'tree': tree,
         }
 
-        def parsejobs(myurl):
+        def parseconfigurations(job):
+            matrix_jobs = []
+            configurations = parsejobs(job['url'] + '/api/json',
+                                       {'tree': 'activeConfigurations[name,url]'},
+                                       'activeConfigurations')
+            for conf in configurations:
+                statuses_params = ','.join(
+                    ["{0}[{1}]".format(s, jobs_param) for s in self.statuses])
+                matrix_jobs += parsejobs(conf['url'] + '/api/json',
+                                         {'tree': "fullName," + statuses_params})
+            return matrix_jobs
+
+        def parsejobs(myurl, params, target='jobs'):
             # params = tree: jobs[name,lastBuild[number,timestamp,duration,actions[queuingDurationMillis...
             if self._user and self._password:
                 response = requests.get(myurl, params=params, auth=(self._user, self._password), verify=(not self._insecure))
@@ -74,16 +86,23 @@ class JenkinsCollector(object):
                 pprint(result)
 
             jobs = []
-            for job in result['jobs']:
-                if job['_class'] == 'com.cloudbees.hudson.plugins.folder.Folder' or \
-                   job['_class'] == 'jenkins.branch.OrganizationFolder' or \
-                   job['_class'] == 'org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject':
-                    jobs += parsejobs(job['url'] + '/api/json')
-                else:
-                    jobs.append(job)
-            return jobs
+            if target in result:
+                for job in result[target]:
+                    if job.get('_class') in ['com.cloudbees.hudson.plugins.folder.Folder',
+                                             'jenkins.branch.OrganizationFolder',
+                                             'org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject']:
+                        jobs += parsejobs(job['url'] + '/api/json', params)
 
-        return parsejobs(url)
+                    elif job.get('_class') == 'hudson.matrix.MatrixProject':
+                        jobs.append(job)
+                        jobs += parseconfigurations(job)
+                    else:
+                        jobs.append(job)
+                return jobs
+            else:
+                return [result, ]
+
+        return parsejobs(url, params)
 
     def _setup_empty_prometheus_metrics(self):
         # The metrics we want to export.
