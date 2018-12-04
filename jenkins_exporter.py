@@ -80,7 +80,7 @@ class JenkinsCollector(object):
             if DEBUG:
                 pprint(response.text)
             if response.status_code != requests.codes.ok:
-                raise Exception("Call to url %s failed with status: %s" % (myurl, response.status_code))
+                return []
             result = response.json()
             if DEBUG:
                 pprint(result)
