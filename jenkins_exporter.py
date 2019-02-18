@@ -186,6 +186,13 @@ def parse_args():
         default=int(os.environ.get('VIRTUAL_PORT', '9118'))
     )
     parser.add_argument(
+        '--addr',
+        metavar='addr',
+        required=False,
+        help='Bind to this addr',
+        default='0.0.0.0'
+    )
+    parser.add_argument(
         '-k', '--insecure',
         dest='insecure',
         required=False,
@@ -200,9 +207,10 @@ def main():
     try:
         args = parse_args()
         port = int(args.port)
+        addr = args.addr
         REGISTRY.register(JenkinsCollector(args.jenkins, args.user, args.password, args.insecure))
-        start_http_server(port)
-        print("Polling {}. Serving at port: {}".format(args.jenkins, port))
+        start_http_server(port, addr=addr)
+        print("Polling {}. Serving at: http://{}:{}".format(args.jenkins, addr, port))
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
